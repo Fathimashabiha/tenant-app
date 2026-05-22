@@ -1,0 +1,15 @@
+/apps/sz-admin-webapp
+/apps/sz-asset-webapp
+/apps/sz-contract-webapp
+/apps/sz-contract-service
+/apps/sz-hse-webapp
+/apps/sz-inspection-webapp
+/apps/sz-inventory-webapp
+/apps/sz-inventory-service
+/apps/sz-ppm-webapp
+/apps/sz-ppm-service
+/apps/sz-technician-service
+/apps/sz-tenant-service
+/apps/sz-workorder-webapp
+/apps/tech-tango-go-mobile
+/packages
