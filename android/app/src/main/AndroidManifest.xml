@@ -30,7 +30,6 @@
         <category android:name="android.intent.category.DEFAULT"/>
         <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="zen-dwell-mobile"/>
-        <data android:scheme="com.fathimashabiha.zendwellmobile"/>
         <data android:scheme="exp+zen-dwell-mobile-shabiha"/>
       </intent-filter>
     </activity>
