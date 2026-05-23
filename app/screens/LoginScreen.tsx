@@ -1,5 +1,6 @@
 import { useState, useRef } from "react";
 import { View, Text, Image, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, StyleSheet } from "react-native";
+import { useAuth } from "../context/AuthContext";
 import { useNavigation } from "@react-navigation/native";
 import { Phone, ArrowRight, Shield } from "lucide-react-native";
 import Animated, { FadeInDown, FadeInLeft, FadeInRight } from "react-native-reanimated";
@@ -12,13 +13,15 @@ export default function Login() {
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState(["", "", "", ""]);
   const navigation = useNavigation<any>();
+  const auth = useAuth();
   const otpRefs = [useRef<TextInput>(null), useRef<TextInput>(null), useRef<TextInput>(null), useRef<TextInput>(null)];
 
   const handleSendOtp = () => {
     if (phone.length >= 9) setStep("otp");
   };
 
-  const handleVerify = () => {
+  const handleVerify = async () => {
+    await auth.login(phone);
     navigation.navigate("Main");
   };
 

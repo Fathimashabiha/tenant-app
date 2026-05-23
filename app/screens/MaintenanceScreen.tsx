@@ -333,28 +333,6 @@ export default function Maintenance() {
 
   // Show Camera / Gallery action sheet
   const handleAddPhoto = () => {
-    if (!isNativeCameraAvailable()) {
-      // Fallback
-      let mockPhoto = "https://images.unsplash.com/photo-1581092921461-eab62e97a780?auto=format&fit=crop&w=400&q=80"; // default
-      const category = (issueType || "").toLowerCase();
-      if (category.includes("ac") || category.includes("cooling")) {
-        mockPhoto = "https://images.unsplash.com/photo-1621905252507-b354bc25edac?auto=format&fit=crop&w=400&q=80";
-      } else if (category.includes("leak") || category.includes("water") || category.includes("pipe") || category.includes("clogged") || category.includes("burst")) {
-        mockPhoto = "https://images.unsplash.com/photo-1504148455328-c376907d081c?auto=format&fit=crop&w=400&q=80";
-      } else if (category.includes("light") || category.includes("power") || category.includes("outlet") || category.includes("wire") || category.includes("flicker")) {
-        mockPhoto = "https://images.unsplash.com/photo-1558244661-d248897f7bc4?auto=format&fit=crop&w=400&q=80";
-      } else if (category.includes("lock") || category.includes("door") || category.includes("window")) {
-        mockPhoto = "https://images.unsplash.com/photo-1513694203232-719a280e022f?auto=format&fit=crop&w=400&q=80";
-      } else if (category.includes("pest")) {
-        mockPhoto = "https://images.unsplash.com/photo-1587334206574-35113a8525b8?auto=format&fit=crop&w=400&q=80";
-      } else if (category.includes("wall") || category.includes("paint") || category.includes("ceiling")) {
-        mockPhoto = "https://images.unsplash.com/photo-1562259949-e8e7689d7828?auto=format&fit=crop&w=400&q=80";
-      }
-      setCapturedPhotos(prev => [...prev, mockPhoto]);
-      Alert.alert("Sandbox Mode", "Native Camera not linked. Running in Sandbox/Simulator Mode.");
-      return;
-    }
-
     if (Platform.OS === "ios") {
       ActionSheetIOS.showActionSheetWithOptions(
         {
@@ -385,14 +363,6 @@ export default function Maintenance() {
       setCapturedVideo(null);
       return;
     }
-    if (!isNativeCameraAvailable()) {
-      setCapturedVideo({
-        uri: "https://assets.mixkit.co/videos/preview/mixkit-plumber-screwing-a-pipe-under-the-sink-44026-large.mp4",
-        name: "simulated_issue_video.mp4",
-      });
-      Alert.alert("Sandbox Mode", "Native Video Camera not linked. Running in Sandbox/Simulator Mode.");
-      return;
-    }
     const ImagePicker = getImagePicker();
     if (!ImagePicker) return;
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
@@ -418,28 +388,6 @@ export default function Maintenance() {
   // ─── Audio: real microphone recording ────────────────────────────────────
   const startRecordingAudio = async () => {
     if (isRecordingAudio) return;
-    if (!isNativeAudioAvailable()) {
-      // Fallback recording state machine
-      setIsRecordingAudio(true);
-      setRecordingDuration(0);
-      if (playbackIntervalId) { clearInterval(playbackIntervalId); setPlaybackIntervalId(null); }
-      setIsPlayingAudio(false);
-      setAudioPlaySeconds(0);
-      const interval = setInterval(() => {
-        setRecordingDuration(prev => {
-          if (prev >= 60) {
-            clearInterval(interval);
-            stopRecordingAudio();
-            return 60;
-          }
-          return prev + 1;
-        });
-      }, 1000);
-      setRecordingIntervalId(interval);
-      Alert.alert("Sandbox Mode", "Native Microphone not linked. Running in Sandbox/Simulator Mode.");
-      return;
-    }
-
     const Audio = getExpoAVAudio();
     if (!Audio) return;
 
@@ -492,15 +440,6 @@ export default function Maintenance() {
     if (recordingIntervalId) { clearInterval(recordingIntervalId); setRecordingIntervalId(null); }
     setIsRecordingAudio(false);
 
-    if (!isNativeAudioAvailable()) {
-      const finalDuration = recordingDuration > 0 ? recordingDuration : 3;
-      setCapturedAudio({
-        uri: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
-        durationSec: finalDuration
-      });
-      return;
-    }
-
     if (!recordingRef.current) return;
     const Audio = getExpoAVAudio();
     if (!Audio) return;
@@ -528,8 +467,6 @@ export default function Maintenance() {
     setIsRecordingAudio(false);
     setRecordingDuration(0);
 
-    if (!isNativeAudioAvailable()) return;
-
     if (recordingRef.current) {
       try { await recordingRef.current.stopAndUnloadAsync(); } catch {}
       recordingRef.current = null;
@@ -546,8 +483,6 @@ export default function Maintenance() {
     setAudioPlaySeconds(0);
     setCapturedAudio(null);
 
-    if (!isNativeAudioAvailable()) return;
-
     if (soundRef.current) {
       try { await soundRef.current.stopAsync(); await soundRef.current.unloadAsync(); } catch {}
       soundRef.current = null;
@@ -557,29 +492,6 @@ export default function Maintenance() {
   // ─── Audio: playback ─────────────────────────────────────────────────
   const togglePlayAudio = async () => {
     if (!capturedAudio) return;
-
-    if (!isNativeAudioAvailable()) {
-      // Fallback playback timer
-      if (isPlayingAudio) {
-        if (playbackIntervalId) { clearInterval(playbackIntervalId); setPlaybackIntervalId(null); }
-        setIsPlayingAudio(false);
-      } else {
-        setIsPlayingAudio(true);
-        const interval = setInterval(() => {
-          setAudioPlaySeconds(prev => {
-            if (prev >= capturedAudio.durationSec) {
-              clearInterval(interval);
-              setIsPlayingAudio(false);
-              setPlaybackIntervalId(null);
-              return 0;
-            }
-            return prev + 1;
-          });
-        }, 1000);
-        setPlaybackIntervalId(interval);
-      }
-      return;
-    }
 
     const Audio = getExpoAVAudio();
     if (!Audio) return;
@@ -630,32 +542,6 @@ export default function Maintenance() {
 
   const togglePlayDetailAudio = async (url: string | undefined) => {
     if (!url) return;
-
-    if (!isNativeAudioAvailable()) {
-      // Fallback playback timer for Detail View
-      if (isDetailPlayingAudio) {
-        if (detailPlaybackIntervalId) {
-          clearInterval(detailPlaybackIntervalId);
-          setDetailPlaybackIntervalId(null);
-        }
-        setIsDetailPlayingAudio(false);
-      } else {
-        setIsDetailPlayingAudio(true);
-        const interval = setInterval(() => {
-          setDetailAudioPlaySeconds(prev => {
-            if (prev >= 10) { // Default 10 seconds mock duration
-              clearInterval(interval);
-              setIsDetailPlayingAudio(false);
-              setDetailPlaybackIntervalId(null);
-              return 0;
-            }
-            return prev + 1;
-          });
-        }, 1000);
-        setDetailPlaybackIntervalId(interval);
-      }
-      return;
-    }
 
     const Audio = getExpoAVAudio();
     if (!Audio) return;

@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import AppNavigator from './navigation/AppNavigator';
 import { FeatureProvider } from './context/FeatureContext';
+import { AuthProvider } from './context/AuthContext';
 import { registerRootComponent } from 'expo';
 import { useEffect } from 'react';
 import * as SplashScreen from 'expo-splash-screen';
@@ -34,12 +35,14 @@ function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <FeatureProvider>
-        <NavigationContainer>
-          <StatusBar style="light" translucent backgroundColor="transparent" />
-          <AppNavigator />
-        </NavigationContainer>
-      </FeatureProvider>
+      <AuthProvider>
+        <FeatureProvider>
+          <NavigationContainer>
+            <StatusBar style="light" translucent backgroundColor="transparent" />
+            <AppNavigator />
+          </NavigationContainer>
+        </FeatureProvider>
+      </AuthProvider>
     </QueryClientProvider>
   );
 }

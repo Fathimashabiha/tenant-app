@@ -1,21 +1,17 @@
-import { NativeModules } from "react-native";
 import type { Audio as ExpoAVAudio } from "expo-av";
 
 export type ExpoRecording = ExpoAVAudio.Recording;
 export type ExpoSound = ExpoAVAudio.Sound;
 
-/** Native module is linked in the current dev build / binary. */
-export const isNativeCameraAvailable = (): boolean =>
-  NativeModules.ExponentImagePicker != null;
+/** Always available — expo-image-picker and expo-av are installed in the dev build. */
+export const isNativeCameraAvailable = (): boolean => true;
 
-export const isNativeAudioAvailable = (): boolean =>
-  NativeModules.ExponentAV != null;
+export const isNativeAudioAvailable = (): boolean => true;
 
 let imagePickerModule: typeof import("expo-image-picker") | null = null;
 let expoAVAudioModule: typeof ExpoAVAudio | null = null;
 
 export function getImagePicker(): typeof import("expo-image-picker") | null {
-  if (!isNativeCameraAvailable()) return null;
   if (!imagePickerModule) {
     imagePickerModule = require("expo-image-picker");
   }
@@ -23,7 +19,6 @@ export function getImagePicker(): typeof import("expo-image-picker") | null {
 }
 
 export function getExpoAVAudio(): typeof ExpoAVAudio | null {
-  if (!isNativeAudioAvailable()) return null;
   if (!expoAVAudioModule) {
     expoAVAudioModule = require("expo-av").Audio;
   }
