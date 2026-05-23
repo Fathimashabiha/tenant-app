@@ -50,7 +50,8 @@
         {
           "microphonePermission": "The app accesses your microphone to record voice notes of maintenance issues."
         }
-      ]
+      ],
+      "expo-build-properties"
     ],
     "extra": {
       "eas": {
