@@ -1,7 +1,8 @@
 {
   "expo": {
+    "owner": "shabihashabuz",
     "name": "zen-dwell-mobile",
-    "slug": "zen-dwell-mobile",
+    "slug": "zen-dwell-mobile-shabiha",
     "scheme": "zen-dwell-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -28,7 +29,8 @@
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO",
         "android.permission.READ_MEDIA_IMAGES",
-        "android.permission.READ_MEDIA_VIDEO"
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
       ]
     },
     "web": {
@@ -52,7 +54,7 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "e537b95a-7ac2-45ea-a41f-0ecbf28eaf9d"
+        "projectId": "3a042f1a-e51a-44dd-9de0-6434b1c0fea1"
       }
     }
   }
