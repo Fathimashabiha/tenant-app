@@ -1,26 +1,46 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { maintenanceService } from "../../lib/maintenanceService";
+import {
+  clearMaintenanceDraft,
+  loadMaintenanceDraft,
+  saveMaintenanceDraft,
+  type MaintenanceDraft,
+  type MaintenanceRequestMode,
+} from "../../lib/maintenanceDraftStorage";
+import { assetService, type Asset } from "../../lib/assetService";
+import AssetQrScanner from "../components/maintenance/AssetQrScanner";
+import MaintenanceCaptureCamera from "../components/maintenance/MaintenanceCaptureCamera";
+import MaintenanceVideoPlayer from "../components/maintenance/MaintenanceVideoPlayer";
 import { useNavigation } from "@react-navigation/native";
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  TextInput, KeyboardAvoidingView, Platform, Image, Alert, ActionSheetIOS,
+  TextInput, KeyboardAvoidingView, Platform, Image, Alert, ActionSheetIOS, AppState,
 } from "react-native";
 import {
   ArrowLeft, Camera, Star, MapPin, MessageCircle,
   ChevronRight, CheckCircle2, Clock, Phone, Send, ThumbsUp,
   Mic, Video, Play, Pause, Trash2, Square, ImageIcon,
+  QrCode, Package, ScanLine,
 } from "lucide-react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { COLORS, SIZES, FONTS, GRADIENTS } from "../../constants/Theme";
 import {
-  getExpoAVAudio,
   getImagePicker,
-  isNativeAudioAvailable,
-  isNativeCameraAvailable,
-  type ExpoRecording,
-  type ExpoSound,
+  isExpoCameraAvailable,
+  isExpoAudioAvailable,
 } from "../../lib/nativeMedia";
+import {
+  configureMaintenanceAudioForPlayback,
+  configureMaintenanceAudioForRecording,
+  createMaintenancePlayer,
+  createMaintenanceRecorder,
+  releaseMaintenancePlayer,
+  requestMaintenanceMicPermission,
+  subscribeToPlayerFinished,
+  type MaintenanceAudioPlayer,
+  type MaintenanceAudioRecorder,
+} from "../../lib/maintenanceAudio";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -49,6 +69,9 @@ type Request = {
 
 type ScreenView =
   | "list"
+  | "request_type"
+  | "qr_scan"
+  | "asset_details"
   | "create"
   | "detail"
   | "chat"
@@ -251,16 +274,24 @@ export default function Maintenance() {
   const [showIssueDrop, setShowIssueDrop] = useState(false);
   const [description, setDescription]    = useState("");
   const [prefTime, setPrefTime]           = useState("Any");
+  const [requestMode, setRequestMode]     = useState<MaintenanceRequestMode | null>(null);
+  const [scannedAsset, setScannedAsset]   = useState<Asset | null>(null);
+  const [qrScanError, setQrScanError]     = useState<string | null>(null);
+  const [isResolvingQr, setIsResolvingQr] = useState(false);
+  const [captureCameraVisible, setCaptureCameraVisible] = useState(false);
+  const [captureMode, setCaptureMode] = useState<"photo" | "video">("photo");
 
   // ─── Media capture states ─────────────────────────────────────────────────
   const [capturedPhotos, setCapturedPhotos] = useState<string[]>([]);
   const [capturedVideo, setCapturedVideo]   = useState<{ uri: string; name: string } | null>(null);
   const [capturedAudio, setCapturedAudio]   = useState<{ uri: string; durationSec: number } | null>(null);
 
-  // Native audio recording/playback refs (expo-av)
-  const recordingRef = useRef<ExpoRecording | null>(null);
-  const soundRef     = useRef<ExpoSound | null>(null);
-  const detailSoundRef = useRef<ExpoSound | null>(null);
+  // Native audio recording/playback refs (expo-audio)
+  const recordingRef = useRef<MaintenanceAudioRecorder | null>(null);
+  const soundRef = useRef<MaintenanceAudioPlayer | null>(null);
+  const detailSoundRef = useRef<MaintenanceAudioPlayer | null>(null);
+  const soundFinishSubRef = useRef<{ remove: () => void } | null>(null);
+  const detailSoundFinishSubRef = useRef<{ remove: () => void } | null>(null);
 
   // Recording UI states
   const [isRecordingAudio, setIsRecordingAudio]   = useState(false);
@@ -272,27 +303,177 @@ export default function Maintenance() {
   const [audioPlaySeconds, setAudioPlaySeconds] = useState(0);
   const [playbackIntervalId, setPlaybackIntervalId] = useState<any>(null);
 
+  const buildDraft = (): MaintenanceDraft => ({
+    requestMode,
+    scannedAsset,
+    issueType,
+    description,
+    prefTime,
+    capturedPhotos,
+    capturedVideo,
+    capturedAudio,
+  });
+
+  const persistDraft = async () => {
+    if (!["create", "qr_scan", "asset_details", "request_type"].includes(view)) return;
+    await saveMaintenanceDraft(buildDraft());
+  };
+
+  const resetCreateFlow = () => {
+    setRequestMode(null);
+    setScannedAsset(null);
+    setQrScanError(null);
+    setIsResolvingQr(false);
+    setCaptureCameraVisible(false);
+    setIssueType("");
+    setDescription("");
+    setPrefTime("Any");
+    setShowIssueDrop(false);
+    setCapturedPhotos([]);
+    setCapturedVideo(null);
+    setCapturedAudio(null);
+    setIsRecordingAudio(false);
+    setRecordingDuration(0);
+    setIsPlayingAudio(false);
+    setAudioPlaySeconds(0);
+    if (recordingIntervalId) clearInterval(recordingIntervalId);
+    if (playbackIntervalId) clearInterval(playbackIntervalId);
+    setRecordingIntervalId(null);
+    setPlaybackIntervalId(null);
+  };
+
+  const startNewRequest = () => {
+    resetCreateFlow();
+    setView("request_type");
+  };
+
+  const selectLocationBased = () => {
+    setRequestMode("location");
+    setScannedAsset(null);
+    setQrScanError(null);
+    setView("create");
+  };
+
+  const selectAssetBased = () => {
+    setRequestMode("asset");
+    setScannedAsset(null);
+    setQrScanError(null);
+    setView("qr_scan");
+  };
+
+  const handleQrScanned = async (data: string) => {
+    setIsResolvingQr(true);
+    setQrScanError(null);
+    try {
+      const asset = await assetService.lookupByQr(data);
+      if (!asset) {
+        setQrScanError("Invalid QR code. Please scan a valid asset tag.");
+        return;
+      }
+      setScannedAsset(asset);
+      setView("asset_details");
+    } catch {
+      setQrScanError("Could not verify asset. Please try again.");
+    } finally {
+      setIsResolvingQr(false);
+    }
+  };
+
+  const proceedToFormFromAsset = () => setView("create");
+
+  const goBackFromCreate = () => {
+    if (requestMode === "asset" && scannedAsset) {
+      setView("asset_details");
+      return;
+    }
+    if (requestMode === "location") {
+      setView("request_type");
+      return;
+    }
+    goList();
+  };
+
+  // Restore unsaved create-form draft after Android kills the app (e.g. camera open).
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      const draft = await loadMaintenanceDraft();
+      if (!draft || cancelled) return;
+
+      setIssueType(draft.issueType);
+      setDescription(draft.description);
+      setPrefTime(draft.prefTime);
+      setRequestMode(draft.requestMode ?? null);
+      setScannedAsset(draft.scannedAsset ?? null);
+      setCapturedPhotos(draft.capturedPhotos ?? []);
+      setCapturedVideo(draft.capturedVideo ?? null);
+      setCapturedAudio(draft.capturedAudio ?? null);
+
+      const hasFormContent =
+        draft.issueType ||
+        draft.description ||
+        (draft.capturedPhotos?.length ?? 0) > 0 ||
+        draft.capturedVideo ||
+        draft.capturedAudio;
+
+      if (draft.requestMode === "asset" && draft.scannedAsset) {
+        setView("create");
+      } else if (draft.requestMode === "location" || (!draft.requestMode && hasFormContent)) {
+        if (!draft.requestMode) setRequestMode("location");
+        setView("create");
+      } else if (draft.requestMode === "asset") {
+        setView("qr_scan");
+      } else {
+        setView("request_type");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Auto-save draft while editing a new request.
+  useEffect(() => {
+    if (!["create", "qr_scan", "asset_details", "request_type"].includes(view)) return;
+    saveMaintenanceDraft(buildDraft()).catch(() => {});
+  }, [view, requestMode, scannedAsset, issueType, description, prefTime, capturedPhotos, capturedVideo, capturedAudio]);
+
+  // Save draft when the app moves to background (before Android may kill it).
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (nextState) => {
+      if (nextState === "background" || nextState === "inactive") {
+        persistDraft().catch(() => {});
+      }
+    });
+    return () => sub.remove();
+  }, [view, requestMode, scannedAsset, issueType, description, prefTime, capturedPhotos, capturedVideo, capturedAudio]);
+
   // Cleanup audio resources on unmount
   useEffect(() => {
     return () => {
-      if (isNativeAudioAvailable()) {
-        if (recordingRef.current) {
-          recordingRef.current.stopAndUnloadAsync().catch(() => {});
+      if (isExpoAudioAvailable()) {
+        try {
+          recordingRef.current?.stop();
+        } catch {
+          // Ignore cleanup errors.
         }
-        if (soundRef.current) {
-          soundRef.current.unloadAsync().catch(() => {});
-        }
-        if (detailSoundRef.current) {
-          detailSoundRef.current.unloadAsync().catch(() => {});
-        }
+        soundFinishSubRef.current?.remove();
+        detailSoundFinishSubRef.current?.remove();
+        releaseMaintenancePlayer(soundRef.current);
+        releaseMaintenancePlayer(detailSoundRef.current);
+        soundRef.current = null;
+        detailSoundRef.current = null;
+        recordingRef.current = null;
       }
     };
   }, []);
 
-  // ─── Photo: real camera capture ───────────────────────────────────────────
-  const handleTakePhotoNative = async () => {
+  const capturePhotoWithImagePicker = async () => {
     const ImagePicker = getImagePicker();
     if (!ImagePicker) return;
+    await persistDraft();
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== "granted") {
       Alert.alert("Permission Required", "Please allow camera access to capture photos.");
@@ -302,16 +483,83 @@ export default function Maintenance() {
       mediaTypes: ["images"],
       quality: 0.85,
       allowsEditing: false,
+      copyToCacheDirectory: true,
     });
     if (!result.canceled && result.assets.length > 0) {
-      setCapturedPhotos(prev => [...prev, result.assets[0].uri]);
+      await handlePhotoCaptured(result.assets[0].uri);
     }
   };
+
+  const captureVideoWithImagePicker = async () => {
+    const ImagePicker = getImagePicker();
+    if (!ImagePicker) return;
+    await persistDraft();
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert("Permission Required", "Please allow camera access to record video.");
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ["videos"],
+      videoMaxDuration: 60,
+      quality: 0.7,
+      allowsEditing: false,
+    });
+    if (!result.canceled && result.assets.length > 0) {
+      const asset = result.assets[0];
+      await handleVideoCaptured(asset.uri, asset.fileName || "video_note.mp4");
+    }
+  };
+
+  const openPhotoCamera = async () => {
+    await persistDraft();
+    if (isExpoCameraAvailable()) {
+      setCaptureMode("photo");
+      setCaptureCameraVisible(true);
+      return;
+    }
+    await capturePhotoWithImagePicker();
+  };
+
+  const openVideoCamera = async () => {
+    if (capturedVideo) {
+      setCapturedVideo(null);
+      return;
+    }
+    await persistDraft();
+    if (isExpoCameraAvailable()) {
+      setCaptureMode("video");
+      setCaptureCameraVisible(true);
+      return;
+    }
+    await captureVideoWithImagePicker();
+  };
+
+  const handlePhotoCaptured = async (uri: string) => {
+    const nextPhotos = [...capturedPhotos, uri];
+    setCapturedPhotos(nextPhotos);
+    await saveMaintenanceDraft({ ...buildDraft(), capturedPhotos: nextPhotos });
+  };
+
+  const handleVideoCaptured = async (uri: string, fileName?: string) => {
+    setCapturedVideo({
+      uri,
+      name: fileName || "video_note.mp4",
+    });
+    await saveMaintenanceDraft({
+      ...buildDraft(),
+      capturedVideo: { uri, name: fileName || "video_note.mp4" },
+    });
+  };
+
+  // ─── Photo: in-app camera (expo-camera) ───────────────────────────────────
+  const handleTakePhotoNative = openPhotoCamera;
 
   // ─── Photo: pick from gallery ─────────────────────────────────────────────
   const handlePickFromGalleryNative = async () => {
     const ImagePicker = getImagePicker();
     if (!ImagePicker) return;
+    await persistDraft();
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
       Alert.alert("Permission Required", "Please allow photo library access.");
@@ -324,10 +572,12 @@ export default function Maintenance() {
       selectionLimit: 5,
     });
     if (!result.canceled && result.assets.length > 0) {
-      setCapturedPhotos(prev => [
-        ...prev,
+      const nextPhotos = [
+        ...capturedPhotos,
         ...result.assets.map((a: any) => a.uri),
-      ]);
+      ];
+      setCapturedPhotos(nextPhotos);
+      await saveMaintenanceDraft({ ...buildDraft(), capturedPhotos: nextPhotos });
     }
   };
 
@@ -357,65 +607,31 @@ export default function Maintenance() {
     setCapturedPhotos(prev => prev.filter((_, idx) => idx !== indexToRemove));
   };
 
-  // ─── Video: real camera recording ─────────────────────────────────────────
-  const handleAddVideo = async () => {
-    if (capturedVideo) {
-      setCapturedVideo(null);
-      return;
-    }
-    const ImagePicker = getImagePicker();
-    if (!ImagePicker) return;
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== "granted") {
-      Alert.alert("Permission Required", "Please allow camera access to record video.");
-      return;
-    }
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ["videos"],
-      videoMaxDuration: 60,
-      quality: 0.7,
-      allowsEditing: false,
-    });
-    if (!result.canceled && result.assets.length > 0) {
-      const asset = result.assets[0];
-      setCapturedVideo({
-        uri: asset.uri,
-        name: asset.fileName || "video_note.mp4",
-      });
-    }
-  };
+  // ─── Video: in-app camera (expo-camera) or image-picker fallback ────────────
+  const handleAddVideo = openVideoCamera;
 
-  // ─── Audio: real microphone recording ────────────────────────────────────
+  // ─── Audio: microphone recording (expo-audio) ─────────────────────────────
   const startRecordingAudio = async () => {
-    if (isRecordingAudio) return;
-    const Audio = getExpoAVAudio();
-    if (!Audio) return;
+    if (isRecordingAudio || !isExpoAudioAvailable()) return;
 
     try {
-      const { status } = await Audio.requestPermissionsAsync();
-      if (status !== "granted") {
+      const granted = await requestMaintenanceMicPermission();
+      if (!granted) {
         Alert.alert("Permission Required", "Please allow microphone access to record voice notes.");
         return;
       }
-      // Stop any active playback
-      if (soundRef.current) {
-        await soundRef.current.stopAsync().catch(() => {});
-        await soundRef.current.unloadAsync().catch(() => {});
-        soundRef.current = null;
-      }
+
+      soundFinishSubRef.current?.remove();
+      releaseMaintenancePlayer(soundRef.current);
+      soundRef.current = null;
       if (playbackIntervalId) { clearInterval(playbackIntervalId); setPlaybackIntervalId(null); }
       setIsPlayingAudio(false);
       setAudioPlaySeconds(0);
 
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-      });
-
-      const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
-      recordingRef.current = recording;
+      await configureMaintenanceAudioForRecording();
+      const recorder = await createMaintenanceRecorder();
+      recordingRef.current = recorder;
+      recorder.record();
       setIsRecordingAudio(true);
       setRecordingDuration(0);
 
@@ -441,19 +657,16 @@ export default function Maintenance() {
     setIsRecordingAudio(false);
 
     if (!recordingRef.current) return;
-    const Audio = getExpoAVAudio();
-    if (!Audio) return;
     try {
-      const status = await recordingRef.current.getStatusAsync();
-      const durationMs = status.durationMillis ?? 0;
-      await recordingRef.current.stopAndUnloadAsync();
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
-      const uri = recordingRef.current.getURI();
+      const status = recordingRef.current.getStatus();
+      await recordingRef.current.stop();
+      await configureMaintenanceAudioForPlayback();
+      const uri = recordingRef.current.uri;
       recordingRef.current = null;
       if (uri) {
         setCapturedAudio({
           uri,
-          durationSec: Math.max(1, Math.floor(durationMs / 1000)),
+          durationSec: Math.max(1, Math.floor((status.durationMillis ?? 0) / 1000)),
         });
       }
     } catch (err) {
@@ -468,13 +681,14 @@ export default function Maintenance() {
     setRecordingDuration(0);
 
     if (recordingRef.current) {
-      try { await recordingRef.current.stopAndUnloadAsync(); } catch {}
+      try {
+        await recordingRef.current.stop();
+      } catch {
+        // Ignore cancel errors.
+      }
       recordingRef.current = null;
     }
-    const Audio = getExpoAVAudio();
-    if (Audio) {
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: false }).catch(() => {});
-    }
+    await configureMaintenanceAudioForPlayback().catch(() => {});
   };
 
   const deleteCapturedAudio = async () => {
@@ -483,50 +697,44 @@ export default function Maintenance() {
     setAudioPlaySeconds(0);
     setCapturedAudio(null);
 
-    if (soundRef.current) {
-      try { await soundRef.current.stopAsync(); await soundRef.current.unloadAsync(); } catch {}
-      soundRef.current = null;
-    }
+    soundFinishSubRef.current?.remove();
+    soundFinishSubRef.current = null;
+    releaseMaintenancePlayer(soundRef.current);
+    soundRef.current = null;
   };
 
-  // ─── Audio: playback ─────────────────────────────────────────────────
   const togglePlayAudio = async () => {
-    if (!capturedAudio) return;
-
-    const Audio = getExpoAVAudio();
-    if (!Audio) return;
+    if (!capturedAudio || !isExpoAudioAvailable()) return;
 
     try {
       if (isPlayingAudio) {
-        if (soundRef.current) await soundRef.current.pauseAsync().catch(() => {});
+        soundRef.current?.pause();
         if (playbackIntervalId) { clearInterval(playbackIntervalId); setPlaybackIntervalId(null); }
         setIsPlayingAudio(false);
       } else {
-        await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true });
+        await configureMaintenanceAudioForPlayback();
         if (!soundRef.current) {
-          const { sound } = await Audio.Sound.createAsync({ uri: capturedAudio.uri });
-          soundRef.current = sound;
-          sound.setOnPlaybackStatusUpdate((s: any) => {
-            if (s.isLoaded && s.didJustFinish) {
-              setIsPlayingAudio(false);
-              setAudioPlaySeconds(0);
-              soundRef.current = null;
-            }
+          const player = createMaintenancePlayer(capturedAudio.uri);
+          soundRef.current = player;
+          soundFinishSubRef.current = subscribeToPlayerFinished(player, () => {
+            if (playbackIntervalId) clearInterval(playbackIntervalId);
+            setPlaybackIntervalId(null);
+            setIsPlayingAudio(false);
+            setAudioPlaySeconds(0);
           });
         }
-        await soundRef.current!.playAsync();
+        soundRef.current.play();
         setIsPlayingAudio(true);
         const interval = setInterval(() => {
-          setAudioPlaySeconds(prev => {
-            if (prev >= capturedAudio.durationSec) {
-              clearInterval(interval);
-              setIsPlayingAudio(false);
-              setPlaybackIntervalId(null);
-              return 0;
-            }
-            return prev + 1;
-          });
-        }, 1000);
+          const current = Math.floor(soundRef.current?.currentTime ?? 0);
+          setAudioPlaySeconds(current);
+          if (current >= capturedAudio.durationSec) {
+            clearInterval(interval);
+            setIsPlayingAudio(false);
+            setPlaybackIntervalId(null);
+            setAudioPlaySeconds(0);
+          }
+        }, 500);
         setPlaybackIntervalId(interval);
       }
     } catch (err) {
@@ -541,72 +749,44 @@ export default function Maintenance() {
   const [detailPlaybackIntervalId, setDetailPlaybackIntervalId] = useState<any>(null);
 
   const togglePlayDetailAudio = async (url: string | undefined) => {
-    if (!url) return;
-
-    const Audio = getExpoAVAudio();
-    if (!Audio) return;
+    if (!url || !isExpoAudioAvailable()) return;
 
     try {
       if (isDetailPlayingAudio) {
-        if (detailSoundRef.current) {
-          await detailSoundRef.current.pauseAsync().catch(() => {});
-        }
+        detailSoundRef.current?.pause();
         if (detailPlaybackIntervalId) {
           clearInterval(detailPlaybackIntervalId);
           setDetailPlaybackIntervalId(null);
         }
         setIsDetailPlayingAudio(false);
       } else {
-        await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true });
+        await configureMaintenanceAudioForPlayback();
         if (!detailSoundRef.current) {
-          const { sound } = await Audio.Sound.createAsync({ uri: url });
-          detailSoundRef.current = sound;
-          
-          const status = await sound.getStatusAsync();
-          const totalSec = status.isLoaded && status.durationMillis ? Math.ceil(status.durationMillis / 1000) : 5;
-          
-          sound.setOnPlaybackStatusUpdate((s: any) => {
-            if (s.isLoaded && s.didJustFinish) {
-              setIsDetailPlayingAudio(false);
-              setDetailAudioPlaySeconds(0);
-              detailSoundRef.current = null;
-            }
+          const player = createMaintenancePlayer(url);
+          detailSoundRef.current = player;
+          detailSoundFinishSubRef.current = subscribeToPlayerFinished(player, () => {
+            if (detailPlaybackIntervalId) clearInterval(detailPlaybackIntervalId);
+            setDetailPlaybackIntervalId(null);
+            setIsDetailPlayingAudio(false);
+            setDetailAudioPlaySeconds(0);
           });
-          
-          await sound.playAsync();
-          setIsDetailPlayingAudio(true);
-          setDetailAudioPlaySeconds(0);
-          
-          const interval = setInterval(() => {
-            setDetailAudioPlaySeconds(prev => {
-              if (prev >= totalSec) {
-                clearInterval(interval);
-                setIsDetailPlayingAudio(false);
-                setDetailPlaybackIntervalId(null);
-                return 0;
-              }
-              return prev + 1;
-            });
-          }, 1000);
-          setDetailPlaybackIntervalId(interval);
-        } else {
-          await detailSoundRef.current.playAsync();
-          setIsDetailPlayingAudio(true);
-          const status = await detailSoundRef.current.getStatusAsync();
-          const totalSec = status.isLoaded && status.durationMillis ? Math.ceil(status.durationMillis / 1000) : 5;
-          const interval = setInterval(() => {
-            setDetailAudioPlaySeconds(prev => {
-              if (prev >= totalSec) {
-                clearInterval(interval);
-                setIsDetailPlayingAudio(false);
-                setDetailPlaybackIntervalId(null);
-                return 0;
-              }
-              return prev + 1;
-            });
-          }, 1000);
-          setDetailPlaybackIntervalId(interval);
         }
+        detailSoundRef.current.play();
+        setIsDetailPlayingAudio(true);
+        setDetailAudioPlaySeconds(0);
+
+        const interval = setInterval(() => {
+          const current = Math.floor(detailSoundRef.current?.currentTime ?? 0);
+          const totalSec = Math.max(1, Math.ceil(detailSoundRef.current?.duration ?? 5));
+          setDetailAudioPlaySeconds(current);
+          if (current >= totalSec) {
+            clearInterval(interval);
+            setIsDetailPlayingAudio(false);
+            setDetailPlaybackIntervalId(null);
+            setDetailAudioPlaySeconds(0);
+          }
+        }, 500);
+        setDetailPlaybackIntervalId(interval);
       }
     } catch (err) {
       console.error("Detail playback error:", err);
@@ -624,6 +804,8 @@ export default function Maintenance() {
 
   const goDetail = (req: Request) => { setSelectedReq(req); setView("detail"); };
   const goList   = () => {
+    clearMaintenanceDraft().catch(() => {});
+    resetCreateFlow();
     setSelectedReq(null);
     setView("list");
     setIsDetailPlayingAudio(false);
@@ -633,7 +815,9 @@ export default function Maintenance() {
       setDetailPlaybackIntervalId(null);
     }
     if (detailSoundRef.current) {
-      detailSoundRef.current.unloadAsync().catch(() => {});
+      detailSoundFinishSubRef.current?.remove();
+      detailSoundFinishSubRef.current = null;
+      releaseMaintenancePlayer(detailSoundRef.current);
       detailSoundRef.current = null;
     }
   };
@@ -651,35 +835,52 @@ export default function Maintenance() {
     mutationFn: (payload: any) => maintenanceService.createRequest(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["maintenance"] });
-      setIssueType(""); setDescription(""); setPrefTime("Any");
+      clearMaintenanceDraft().catch(() => {});
+      resetCreateFlow();
       // Clear media states
       setCapturedPhotos([]);
       setCapturedVideo(null);
       setCapturedAudio(null);
-      setIsRecordingAudio(false);
-      setRecordingDuration(0);
-      setIsPlayingAudio(false);
-      setAudioPlaySeconds(0);
-      if (recordingIntervalId) clearInterval(recordingIntervalId);
-      if (playbackIntervalId) clearInterval(playbackIntervalId);
-      setRecordingIntervalId(null);
-      setPlaybackIntervalId(null);
       // Release native audio resources safely
-      if (isNativeAudioAvailable()) {
-        if (soundRef.current) { soundRef.current.unloadAsync().catch(() => {}); soundRef.current = null; }
-        if (recordingRef.current) { recordingRef.current.stopAndUnloadAsync().catch(() => {}); recordingRef.current = null; }
+      if (isExpoAudioAvailable()) {
+        soundFinishSubRef.current?.remove();
+        soundFinishSubRef.current = null;
+        releaseMaintenancePlayer(soundRef.current);
+        soundRef.current = null;
+        try {
+          recordingRef.current?.stop();
+        } catch {
+          // Ignore cleanup errors.
+        }
+        recordingRef.current = null;
       }
       setView("list");
     }
   });
 
   const handleSubmitRequest = () => {
+    if (!issueType.trim()) {
+      Alert.alert("Missing Issue", "Please select an issue type before submitting.");
+      return;
+    }
+    if (requestMode === "asset" && !scannedAsset) {
+      Alert.alert("Missing Asset", "Please scan the asset QR code before submitting.");
+      return;
+    }
+
     createMutation.mutate({
       tenantId: TENANT_ID,
       title: issueType || "New Request",
       description,
       category: issueType.split(" ")[0] || "General",
       priority: "medium",
+      requestType: requestMode ?? "location",
+      assetId: scannedAsset?.id,
+      assetName: scannedAsset?.name,
+      location: requestMode === "asset" && scannedAsset
+        ? scannedAsset.location
+        : "Door 1204, 12th, Tower A, Marina Heights",
+      preferredTime: prefTime,
       photos: capturedPhotos,
       videoUrl: capturedVideo ? capturedVideo.uri : undefined,
       audioUrl: capturedAudio ? capturedAudio.uri : undefined,
@@ -723,7 +924,7 @@ export default function Maintenance() {
                   <Text style={styles.gradientHeaderSub}>Track & manage requests</Text>
                 </View>
               </View>
-              <TouchableOpacity style={styles.newBtn} onPress={() => setView("create")}>
+              <TouchableOpacity style={styles.newBtn} onPress={startNewRequest}>
                 <Text style={styles.newBtnText}>+ New</Text>
               </TouchableOpacity>
             </View>
@@ -815,12 +1016,159 @@ export default function Maintenance() {
     );
   }
 
-  // ── Render: Create ────────────────────────────────────────────────────────
-  if (view === "create") {
+  // ── Render: Request Type ──────────────────────────────────────────────────
+  if (view === "request_type") {
     return (
       <View style={styles.container}>
-          <SubHeader title="New Request" onBack={goList} />
+        <SubHeader title="New Request" subtitle="How would you like to report?" onBack={goList} />
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.formContent} showsVerticalScrollIndicator={false}>
+          <Text style={styles.formIntroText}>
+            Choose whether this request is tied to a specific asset or a general location.
+          </Text>
+
+          <TouchableOpacity style={styles.flowOptionCard} onPress={selectAssetBased}>
+            <View style={[styles.flowOptionIcon, { backgroundColor: "#ecfeff" }]}>
+              <QrCode size={24} color={COLORS.primary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.flowOptionTitle}>Asset Based</Text>
+              <Text style={styles.flowOptionSub}>
+                Scan the QR code on the equipment or fixture, review asset details, then submit your request.
+              </Text>
+            </View>
+            <ChevronRight size={18} color="#94a3b8" />
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.flowOptionCard} onPress={selectLocationBased}>
+            <View style={[styles.flowOptionIcon, { backgroundColor: "#f0fdf4" }]}>
+              <MapPin size={24} color={COLORS.success} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.flowOptionTitle}>Location Based</Text>
+              <Text style={styles.flowOptionSub}>
+                Report an issue for your unit or building area without scanning an asset tag.
+              </Text>
+            </View>
+            <ChevronRight size={18} color="#94a3b8" />
+          </TouchableOpacity>
+        </ScrollView>
+      </View>
+    );
+  }
+
+  // ── Render: QR Scan ─────────────────────────────────────────────────────
+  if (view === "qr_scan") {
+    return (
+      <View style={styles.container}>
+        <SubHeader title="Scan Asset QR" subtitle="Point camera at the asset tag" onBack={() => setView("request_type")} />
+        <AssetQrScanner
+          onScanSuccess={handleQrScanned}
+          isResolving={isResolvingQr}
+          errorMessage={qrScanError}
+        />
+        <View style={styles.qrHelpBox}>
+          <Text style={styles.qrHelpTitle}>Testing without a QR tag?</Text>
+          <Text style={styles.qrHelpSub}>Use one of these sample asset IDs:</Text>
+          <View style={styles.qrSampleRow}>
+            {["AST-AC-1204", "AST-WH-1204", "AST-LGT-1204"].map(id => (
+              <TouchableOpacity key={id} style={styles.qrSampleChip} onPress={() => handleQrScanned(id)}>
+                <Text style={styles.qrSampleChipText}>{id}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      </View>
+    );
+  }
+
+  // ── Render: Asset Details ─────────────────────────────────────────────────
+  if (view === "asset_details" && scannedAsset) {
+    const asset = scannedAsset;
+    return (
+      <View style={styles.container}>
+        <SubHeader title="Asset Details" subtitle="Verify before continuing" onBack={() => setView("qr_scan")} />
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.formContent} showsVerticalScrollIndicator={false}>
+          <View style={styles.assetSuccessBanner}>
+            <CheckCircle2 size={22} color={COLORS.success} />
+            <Text style={styles.assetSuccessText}>QR scan successful</Text>
+          </View>
+
+          <View style={styles.assetCard}>
+            <View style={styles.assetCardHeader}>
+              <View style={styles.assetIconWrap}>
+                <Package size={22} color={COLORS.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.assetName}>{asset.name}</Text>
+                <Text style={styles.assetId}>{asset.id}</Text>
+              </View>
+              <View style={styles.assetStatusBadge}>
+                <Text style={styles.assetStatusText}>{asset.status}</Text>
+              </View>
+            </View>
+
+            <View style={styles.assetMetaGrid}>
+              <View style={styles.assetMetaItem}>
+                <Text style={styles.assetMetaLabel}>Category</Text>
+                <Text style={styles.assetMetaValue}>{asset.category}</Text>
+              </View>
+              <View style={styles.assetMetaItem}>
+                <Text style={styles.assetMetaLabel}>Type</Text>
+                <Text style={styles.assetMetaValue}>{asset.type}</Text>
+              </View>
+              <View style={styles.assetMetaItem}>
+                <Text style={styles.assetMetaLabel}>Serial No.</Text>
+                <Text style={styles.assetMetaValue}>{asset.serialNumber ?? "—"}</Text>
+              </View>
+              <View style={styles.assetMetaItem}>
+                <Text style={styles.assetMetaLabel}>Last Service</Text>
+                <Text style={styles.assetMetaValue}>{asset.lastServiceDate ?? "—"}</Text>
+              </View>
+            </View>
+
+            <View style={styles.assetLocationRow}>
+              <MapPin size={14} color="#64748b" />
+              <Text style={styles.assetLocationText}>{asset.location}</Text>
+            </View>
+          </View>
+
+          <TouchableOpacity style={styles.submitBtn} onPress={proceedToFormFromAsset}>
+            <LinearGradient colors={GRADIENTS.activeNav} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.submitBtnGrad}>
+              <ScanLine size={16} color="white" style={{ marginRight: 8 }} />
+              <Text style={styles.submitBtnText}>Continue to Request Form</Text>
+            </LinearGradient>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.rescanBtn} onPress={() => setView("qr_scan")}>
+            <Text style={styles.rescanBtnText}>Scan a different asset</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </View>
+    );
+  }
+
+  // ── Render: Create ────────────────────────────────────────────────────────
+  if (view === "create") {
+    const isAssetRequest = requestMode === "asset" && scannedAsset;
+    return (
+      <>
+        <View style={styles.container}>
+          <SubHeader
+            title="New Request"
+            subtitle={isAssetRequest ? "Asset based request" : "Location based request"}
+            onBack={goBackFromCreate}
+          />
           <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.formContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+
+            {isAssetRequest && scannedAsset && (
+              <View style={styles.assetFormBanner}>
+                <View style={styles.assetFormBannerTop}>
+                  <Package size={16} color={COLORS.primary} />
+                  <Text style={styles.assetFormBannerTitle}>{scannedAsset.name}</Text>
+                </View>
+                <Text style={styles.assetFormBannerSub}>{scannedAsset.id} · {scannedAsset.location}</Text>
+              </View>
+            )}
 
             {/* Issue / Complaint */}
             <Text style={styles.formLabel}>Issue / Complaint</Text>
@@ -855,17 +1203,39 @@ export default function Maintenance() {
             )}
 
             {/* Location Details */}
-            <Text style={styles.formLabel}>Location Details</Text>
-            <View style={styles.locationGrid}>
-              {[["1204", "Unit"], ["12th Floor", "Floor"], ["Tower A", "Tower"], ["Marina Heights", "Building"]].map(([val, ph]) => (
-                <View key={ph} style={styles.locationInput}>
-                  <Text style={styles.locationInputText}>{val}</Text>
+            <Text style={styles.formLabel}>{isAssetRequest ? "Asset Location" : "Location Details"}</Text>
+            {isAssetRequest && scannedAsset ? (
+              <>
+                <View style={styles.locationGrid}>
+                  {[
+                    [scannedAsset.unit, "Unit"],
+                    [scannedAsset.floor, "Floor"],
+                    [scannedAsset.tower, "Tower"],
+                    [scannedAsset.building, "Building"],
+                  ].map(([val, ph]) => (
+                    <View key={ph} style={styles.locationInput}>
+                      <Text style={styles.locationInputText}>{val}</Text>
+                    </View>
+                  ))}
                 </View>
-              ))}
-            </View>
-            <View style={styles.input}>
-              <Text style={styles.inputText}>Dubai Marina, Dubai, UAE</Text>
-            </View>
+                <View style={styles.input}>
+                  <Text style={styles.inputText}>{scannedAsset.location}</Text>
+                </View>
+              </>
+            ) : (
+              <>
+                <View style={styles.locationGrid}>
+                  {[["1204", "Unit"], ["12th Floor", "Floor"], ["Tower A", "Tower"], ["Marina Heights", "Building"]].map(([val, ph]) => (
+                    <View key={ph} style={styles.locationInput}>
+                      <Text style={styles.locationInputText}>{val}</Text>
+                    </View>
+                  ))}
+                </View>
+                <View style={styles.input}>
+                  <Text style={styles.inputText}>Dubai Marina, Dubai, UAE</Text>
+                </View>
+              </>
+            )}
 
             {/* Description */}
             <Text style={styles.formLabel}>Description</Text>
@@ -905,25 +1275,15 @@ export default function Maintenance() {
               {capturedVideo && (
                 <View style={{ marginBottom: 12 }}>
                   <Text style={styles.mediaSubLabel}>Video Attachment</Text>
-                  <View style={styles.videoPreviewCard}>
-                    <LinearGradient
-                      colors={["rgba(13, 148, 136, 0.9)", "rgba(15, 118, 110, 0.9)"]}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 0 }}
-                      style={styles.videoPreviewGradient}
-                    >
-                      <View style={styles.videoIconBg}>
-                        <Video size={20} color="white" />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.videoTitle}>{capturedVideo.name}</Text>
-                        <Text style={styles.videoSubtitle}>Recorded Video Note</Text>
-                      </View>
-                      <TouchableOpacity style={styles.removeMediaBtnInline} onPress={() => setCapturedVideo(null)}>
-                        <Trash2 size={16} color="white" />
-                      </TouchableOpacity>
-                    </LinearGradient>
-                  </View>
+                  <MaintenanceVideoPlayer
+                    uri={capturedVideo.uri}
+                    title={capturedVideo.name}
+                    subtitle="Recorded Video Note"
+                  />
+                  <TouchableOpacity style={styles.removeVideoBtn} onPress={() => setCapturedVideo(null)}>
+                    <Trash2 size={14} color="#ef4444" />
+                    <Text style={styles.removeVideoBtnText}>Remove video</Text>
+                  </TouchableOpacity>
                 </View>
               )}
 
@@ -1057,6 +1417,15 @@ export default function Maintenance() {
             <View style={{ height: 60 }} />
           </ScrollView>
         </View>
+
+        <MaintenanceCaptureCamera
+          visible={captureCameraVisible && isExpoCameraAvailable()}
+          mode={captureMode}
+          onClose={() => setCaptureCameraVisible(false)}
+          onPhotoCaptured={handlePhotoCaptured}
+          onVideoCaptured={handleVideoCaptured}
+        />
+      </>
     );
   }
 
@@ -1110,22 +1479,11 @@ export default function Maintenance() {
                 {req.videoUrl && (
                   <View style={{ marginBottom: 12 }}>
                     <Text style={[styles.mediaSubLabel, { marginBottom: 6 }]}>Video Attachment</Text>
-                    <View style={styles.videoPreviewCard}>
-                      <LinearGradient
-                        colors={["rgba(13, 148, 136, 0.9)", "rgba(15, 118, 110, 0.9)"]}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 0 }}
-                        style={styles.videoPreviewGradient}
-                      >
-                        <View style={styles.videoIconBg}>
-                          <Video size={20} color="white" />
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.videoTitle}>{req.videoUrl.split('/').pop() || "attached_video_note.mp4"}</Text>
-                          <Text style={styles.videoSubtitle}>Recorded Video Note</Text>
-                        </View>
-                      </LinearGradient>
-                    </View>
+                    <MaintenanceVideoPlayer
+                      uri={req.videoUrl}
+                      title={req.videoUrl.split("/").pop() || "attached_video_note.mp4"}
+                      subtitle="Recorded Video Note"
+                    />
                   </View>
                 )}
 
@@ -1479,6 +1837,107 @@ const styles = StyleSheet.create({
 
   // Form
   formContent: { padding: 16, gap: 6 },
+  formIntroText: { fontSize: 14, color: "#64748b", lineHeight: 20, marginBottom: 8 },
+  flowOptionCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    backgroundColor: "white",
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+  },
+  flowOptionIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  flowOptionTitle: { fontSize: 16, fontWeight: "800", color: "#0f172a" },
+  flowOptionSub: { fontSize: 13, color: "#64748b", marginTop: 4, lineHeight: 18 },
+  qrHelpBox: {
+    backgroundColor: "white",
+    padding: 16,
+    borderTopWidth: 1,
+    borderTopColor: "#e2e8f0",
+  },
+  qrHelpTitle: { fontSize: 14, fontWeight: "700", color: "#0f172a" },
+  qrHelpSub: { fontSize: 12, color: "#64748b", marginTop: 4, marginBottom: 10 },
+  qrSampleRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  qrSampleChip: {
+    backgroundColor: "#f0fdfa",
+    borderWidth: 1,
+    borderColor: "#99f6e4",
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  qrSampleChipText: { fontSize: 12, fontWeight: "700", color: "#0d9488" },
+  assetSuccessBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#f0fdf4",
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: "#bbf7d0",
+  },
+  assetSuccessText: { fontSize: 14, fontWeight: "700", color: "#15803d" },
+  assetCard: {
+    backgroundColor: "white",
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    marginBottom: 8,
+  },
+  assetCardHeader: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 16 },
+  assetIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: "#ecfeff",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  assetName: { fontSize: 17, fontWeight: "800", color: "#0f172a" },
+  assetId: { fontSize: 12, color: "#64748b", marginTop: 2 },
+  assetStatusBadge: {
+    backgroundColor: "#f0fdf4",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 100,
+  },
+  assetStatusText: { fontSize: 11, fontWeight: "700", color: "#15803d" },
+  assetMetaGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginBottom: 12 },
+  assetMetaItem: {
+    width: "47%",
+    backgroundColor: "#f8fafc",
+    borderRadius: 12,
+    padding: 10,
+  },
+  assetMetaLabel: { fontSize: 11, color: "#94a3b8", marginBottom: 4 },
+  assetMetaValue: { fontSize: 13, fontWeight: "700", color: "#0f172a" },
+  assetLocationRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  assetLocationText: { flex: 1, fontSize: 13, color: "#475569", lineHeight: 18 },
+  rescanBtn: { marginTop: 12, alignItems: "center", paddingVertical: 10 },
+  rescanBtnText: { fontSize: 14, fontWeight: "700", color: COLORS.primary },
+  assetFormBanner: {
+    backgroundColor: "#ecfeff",
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#99f6e4",
+    marginBottom: 4,
+  },
+  assetFormBannerTop: { flexDirection: "row", alignItems: "center", gap: 8 },
+  assetFormBannerTitle: { fontSize: 14, fontWeight: "800", color: "#0f172a" },
+  assetFormBannerSub: { fontSize: 12, color: "#475569", marginTop: 4, marginLeft: 24 },
   formLabel: { fontSize: 13, fontWeight: "700", color: "#0f172a", marginTop: 10, marginBottom: 6 },
   selectInput: {
     backgroundColor: "white", borderRadius: 14, padding: 14,
@@ -1670,6 +2129,18 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 1 },
     elevation: 2,
   },
+  removeVideoBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 8,
+    alignSelf: "flex-start",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: "#fef2f2",
+  },
+  removeVideoBtnText: { fontSize: 12, fontWeight: "700", color: "#ef4444" },
   videoPreviewCard: {
     borderRadius: 14,
     overflow: "hidden",

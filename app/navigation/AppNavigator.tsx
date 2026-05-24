@@ -1,5 +1,4 @@
 import React from 'react';
-import { View, ActivityIndicator } from 'react-native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../types/navigation';
 import Welcome from '../screens/WelcomeScreen';
@@ -11,23 +10,11 @@ import Maintenance from '../screens/MaintenanceScreen';
 import Notifications from '../screens/NotificationsScreen';
 import MoveIn from '../screens/MoveInScreen';
 import { useAuth } from '../context/AuthContext';
-import { COLORS } from '../../constants/Theme';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export default function AppNavigator() {
-  const { isLoggedIn, isLoading } = useAuth();
-
-  // While reading persisted auth from AsyncStorage, show a spinner.
-  // This prevents the Welcome screen flashing for already-logged-in users
-  // (e.g. after Android kills the JS bundle when the camera is open).
-  if (isLoading) {
-    return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.background }}>
-        <ActivityIndicator size="large" color={COLORS.primary} />
-      </View>
-    );
-  }
+  const { isLoggedIn } = useAuth();
 
   return (
     <Stack.Navigator

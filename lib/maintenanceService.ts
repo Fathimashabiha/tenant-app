@@ -41,6 +41,11 @@ export interface CreateMaintenanceRequestPayload {
   description: string;
   category: string;
   priority: string;
+  requestType?: "asset" | "location";
+  assetId?: string;
+  assetName?: string;
+  location?: string;
+  preferredTime?: string;
   photos?: string[];
   videoUrl?: string;
   audioUrl?: string;

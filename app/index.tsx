@@ -1,8 +1,7 @@
 import React from 'react';
-import { NavigationContainer } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import AppNavigator from './navigation/AppNavigator';
+import NavigationRoot from './navigation/NavigationRoot';
 import { FeatureProvider } from './context/FeatureContext';
 import { AuthProvider } from './context/AuthContext';
 import { registerRootComponent } from 'expo';
@@ -37,10 +36,10 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <FeatureProvider>
-          <NavigationContainer>
+          <>
             <StatusBar style="light" translucent backgroundColor="transparent" />
-            <AppNavigator />
-          </NavigationContainer>
+            <NavigationRoot />
+          </>
         </FeatureProvider>
       </AuthProvider>
     </QueryClientProvider>

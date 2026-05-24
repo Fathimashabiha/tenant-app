@@ -1,6 +1,6 @@
 {
   "expo": {
-    "owner": "shabihashabuz",
+    "owner": "shabsfathima",
     "name": "zen-dwell-mobile",
     "slug": "zen-dwell-mobile-shabiha",
     "scheme": "zen-dwell-mobile",
@@ -46,16 +46,31 @@
         }
       ],
       [
-        "expo-av",
+        "expo-audio",
         {
           "microphonePermission": "The app accesses your microphone to record voice notes of maintenance issues."
         }
       ],
-      "expo-build-properties"
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "The app uses your camera to scan asset QR codes and capture maintenance photos/videos."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "largeHeap": true
+          }
+        }
+      ],
+      "expo-audio",
+      "expo-video"
     ],
     "extra": {
       "eas": {
-        "projectId": "3a042f1a-e51a-44dd-9de0-6434b1c0fea1"
+        "projectId": "d4bdb782-a0af-4628-abe4-75cb74228091"
       }
     }
   }

@@ -3,6 +3,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const AUTH_KEY = "@zendwell_auth_logged_in";
 const PHONE_KEY = "@zendwell_auth_phone";
+const NAV_STATE_KEY = "@zendwell_navigation_state";
 
 interface AuthContextValue {
   isLoggedIn: boolean;
@@ -55,7 +56,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
-    await AsyncStorage.multiRemove([AUTH_KEY, PHONE_KEY]);
+    await AsyncStorage.multiRemove([AUTH_KEY, PHONE_KEY, NAV_STATE_KEY]);
     setPhone("");
     setIsLoggedIn(false);
   }, []);
