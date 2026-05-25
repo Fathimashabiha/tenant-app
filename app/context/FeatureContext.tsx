@@ -1,4 +1,11 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+} from 'react';
+import { featuresService } from '../../lib/featuresService';
 
 export type FeatureConfig = {
   communityEnabled: boolean;
@@ -10,22 +17,40 @@ const DEFAULT_CONFIG: FeatureConfig = {
   tenancyEnabled: false,
 };
 
+const TENANT_ID = 'default-tenant-uuid';
+
 type FeatureContextType = {
   config: FeatureConfig;
-  updateConfig: (updates: Partial<FeatureConfig>) => void;
+  isLoading: boolean;
+  refreshFeatures: () => Promise<void>;
 };
 
 const FeatureContext = createContext<FeatureContextType | undefined>(undefined);
 
 export function FeatureProvider({ children }: { children: React.ReactNode }) {
   const [config, setConfig] = useState<FeatureConfig>(DEFAULT_CONFIG);
+  const [isLoading, setIsLoading] = useState(true);
 
-  const updateConfig = (updates: Partial<FeatureConfig>) => {
-    setConfig(prev => ({ ...prev, ...updates }));
-  };
+  const refreshFeatures = useCallback(async () => {
+    try {
+      const data = await featuresService.getFeatures(TENANT_ID);
+      setConfig({
+        communityEnabled: Boolean(data.communityEnabled),
+        tenancyEnabled: Boolean(data.tenancyEnabled),
+      });
+    } catch {
+      setConfig(DEFAULT_CONFIG);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshFeatures();
+  }, [refreshFeatures]);
 
   return (
-    <FeatureContext.Provider value={{ config, updateConfig }}>
+    <FeatureContext.Provider value={{ config, isLoading, refreshFeatures }}>
       {children}
     </FeatureContext.Provider>
   );

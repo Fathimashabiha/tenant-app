@@ -5,6 +5,7 @@ import {
   View,
   Text,
   ScrollView,
+  FlatList,
   TouchableOpacity,
   Modal,
   Switch,
@@ -33,7 +34,6 @@ import {
   SplitSquareHorizontal,
   Wrench,
 } from "lucide-react-native";
-import Animated, { FadeInDown } from "react-native-reanimated";
 import { LinearGradient } from "expo-linear-gradient";
 import { COLORS, SIZES, FONTS, SHADOWS, GRADIENTS } from "../../constants/Theme";
 import { Button, Card, TabBar } from "../../components/ui";
@@ -65,6 +65,7 @@ interface Roommate {
 }
 
 interface PaymentRecord {
+  title: string;
   date: string;
   method: string;
   txnId: string;
@@ -663,44 +664,71 @@ export default function Bills() {
     queryFn: () => billsService.getBills(TENANT_ID),
   });
 
+  const visibleServerBills = useMemo(() => {
+    if (config.tenancyEnabled) return serverBills;
+    return serverBills.filter((b) => b.billType === "maintenance");
+  }, [serverBills, config.tenancyEnabled]);
+
   const bills = useMemo(() => {
-    const baseBills = serverBills.map(b => ({
+    return visibleServerBills.map((b) => ({
       id: b.id,
-      icon: b.billType === 'maintenance' ? Wrench : (b.billType === 'rent' ? Building : Zap),
+      icon:
+        b.billType === "maintenance"
+          ? Wrench
+          : b.billType === "rent"
+            ? Building
+            : Zap,
       type: b.title,
       amount: fmt(Number(b.amount)),
       amountNum: Number(b.amount),
       due: new Date(b.dueDate).toLocaleDateString(),
-      status: b.status === 'paid' ? 'paid' : 'unpaid',
-      breakdown: [{ label: "Base Amount", value: `AED ${b.amount}` }]
+      status: b.status.toLowerCase() === "paid" ? ("paid" as const) : ("unpaid" as const),
+      breakdown: [{ label: "Base Amount", value: `AED ${b.amount}` }],
     })) as Bill[];
-    
-    if (!config.tenancyEnabled) {
-      return baseBills.filter(b => b.type.toLowerCase().includes("maintenance"));
-    }
-    return baseBills;
-  }, [serverBills, config.tenancyEnabled]);
+  }, [visibleServerBills]);
+
+  const currentBills = useMemo(
+    () => bills.filter((b) => b.status !== "paid"),
+    [bills]
+  );
 
   const history = useMemo(() => {
     const hist: PaymentRecord[] = [];
-    serverBills.forEach(b => {
-      b.payments?.forEach(p => {
-        hist.push({
-          date: new Date(p.paidAt).toLocaleDateString(),
-          method: p.paymentMethod,
-          txnId: p.id,
-          amount: `AED ${b.amount}`,
-          status: "success"
-        });
+    serverBills
+      .filter((b) => b.status.toLowerCase() === "paid")
+      .forEach((b) => {
+        if (b.payments?.length) {
+          b.payments.forEach((p) => {
+            hist.push({
+              title: b.title,
+              date: new Date(p.paidAt).toLocaleDateString(),
+              method: p.paymentMethod || "Paid",
+              txnId: p.id,
+              amount: `AED ${Number(b.amount).toFixed(2)}`,
+              status: "success",
+            });
+          });
+        } else {
+          hist.push({
+            title: b.title,
+            date: new Date(b.dueDate).toLocaleDateString(),
+            method: "Paid",
+            txnId: b.id,
+            amount: `AED ${Number(b.amount).toFixed(2)}`,
+            status: "success",
+          });
+        }
       });
-    });
-    return hist.sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    return hist.sort(
+      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+    );
   }, [serverBills]);
 
   const payMutation = useMutation({
     mutationFn: ({ billId, method }: { billId: string, method: string }) => billsService.payBill(billId, method),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["bills"] });
+      queryClient.invalidateQueries({ queryKey: ["homeFeed"] });
     }
   });
 
@@ -780,9 +808,9 @@ export default function Bills() {
         />
       )}
 
-      {/* ── Body ── */}
-      <ScrollView style={s.container} showsVerticalScrollIndicator={false}>
-        <View style={s.mainContent}>
+      {/* ── Body (tabs fixed; content scrolls independently) ── */}
+      <View style={s.bodySection}>
+        <View style={s.tabBarWrap}>
           <TabBar
             tabs={[
               { key: "current", label: "Current" },
@@ -790,12 +818,18 @@ export default function Bills() {
             ]}
             activeTab={tab}
             onTabChange={(t) => setTab(t as "current" | "history")}
-            style={s.tabBarMargin}
           />
+        </View>
 
-          {tab === "current" ? (
+        {tab === "current" ? (
+          <ScrollView
+            style={s.scrollBody}
+            contentContainerStyle={s.scrollContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            nestedScrollEnabled
+          >
             <View style={s.billList}>
-              {/* Auto-Pay toggle */}
               <Card style={s.autoPayCard} padding={16} radius="xl">
                 <View style={s.autoPayRow}>
                   <View style={s.autoPayIcon}>
@@ -814,60 +848,73 @@ export default function Bills() {
                 </View>
               </Card>
 
-              {/* Bill rows */}
-              {bills.map((bill, i) => (
-                <Animated.View key={bill.id} entering={FadeInDown.delay(i * 60).duration(300)}>
-                  <TouchableOpacity
-                    style={s.billRow}
-                    onPress={() => setSelectedBill(bill)}
-                    activeOpacity={0.7}
-                  >
-                    <BillIconBg icon={bill.icon} status={bill.status} />
-                    <View style={s.billInfo}>
-                      <Text style={s.billType}>{bill.type}</Text>
-                      <Text style={s.billDueSmall}>Due: {bill.due}</Text>
-                    </View>
-                    <View style={s.billRight}>
-                      <Text style={s.billAmountText}>AED {bill.amount}</Text>
-                      <StatusBadge status={bill.status} />
-                    </View>
-                    <ChevronRight size={16} color={COLORS.mutedForeground} style={{ marginLeft: 4 }} />
-                  </TouchableOpacity>
-                </Animated.View>
+              {currentBills.length === 0 && (
+                <Text style={s.emptyHint}>No outstanding bills.</Text>
+              )}
+              {currentBills.map((bill) => (
+                <TouchableOpacity
+                  key={bill.id}
+                  style={s.billRow}
+                  onPress={() => setSelectedBill(bill)}
+                  activeOpacity={0.7}
+                >
+                  <BillIconBg icon={bill.icon} status={bill.status} />
+                  <View style={s.billInfo}>
+                    <Text style={s.billType}>{bill.type}</Text>
+                    <Text style={s.billDueSmall}>Due: {bill.due}</Text>
+                  </View>
+                  <View style={s.billRight}>
+                    <Text style={s.billAmountText}>AED {bill.amount}</Text>
+                    <StatusBadge status={bill.status} />
+                  </View>
+                  <ChevronRight size={16} color={COLORS.mutedForeground} style={{ marginLeft: 4 }} />
+                </TouchableOpacity>
               ))}
             </View>
-          ) : (
-            <View style={s.historyList}>
-              {history.map((p, i) => (
-                <Animated.View key={i} entering={FadeInDown.delay(i * 60).duration(300)}>
-                  <Card style={s.historyCard} padding={16} radius="xl">
-                    <View style={s.historyHeader}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={s.billType}>
-                          {i === 0 ? "Rent" : i === 1 ? "Electricity (DEWA)" : "Water (DEWA)"}
-                        </Text>
-                        <Text style={s.billDueSmall}>{p.date} · {p.method}</Text>
-                      </View>
-                      <StatusBadge status="success" />
-                    </View>
-                    <View style={s.historyFooter}>
-                      <Text style={s.txnId}>{p.txnId}</Text>
-                      <View style={s.receiptRow}>
-                        <Text style={s.historyAmount}>{p.amount}</Text>
-                        <TouchableOpacity style={s.receiptBtn}>
-                          <Download size={13} color="#2563eb" />
-                          <Text style={s.receiptText}>Receipt</Text>
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  </Card>
-                </Animated.View>
-              ))}
-            </View>
-          )}
-        </View>
-        <View style={{ height: 40 }} />
-      </ScrollView>
+          </ScrollView>
+        ) : (
+          <FlatList
+            style={s.scrollBody}
+            contentContainerStyle={[
+              s.scrollContent,
+              history.length === 0 && s.scrollContentEmpty,
+            ]}
+            data={history}
+            keyExtractor={(p) => p.txnId}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            nestedScrollEnabled
+            removeClippedSubviews={false}
+            ListEmptyComponent={
+              <Text style={s.emptyHint}>No paid bills yet.</Text>
+            }
+            renderItem={({ item: p }) => (
+              <Card style={[s.historyCard, s.historyItemSpacing]} padding={16} radius="xl">
+                <View style={s.historyHeader}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.billType}>{p.title}</Text>
+                    <Text style={s.billDueSmall}>{p.date} · {p.method}</Text>
+                  </View>
+                  <StatusBadge status="success" />
+                </View>
+                <View style={s.historyFooter}>
+                  <Text style={s.txnLabel}>Transaction ID</Text>
+                  <Text style={s.txnId} numberOfLines={1} ellipsizeMode="middle">
+                    {p.txnId}
+                  </Text>
+                  <View style={s.historyFooterBottom}>
+                    <Text style={s.historyAmount}>{p.amount}</Text>
+                    <TouchableOpacity style={s.receiptBtn} activeOpacity={0.7}>
+                      <Download size={13} color="#2563eb" />
+                      <Text style={s.receiptText}>Receipt</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </Card>
+            )}
+          />
+        )}
+      </View>
 
       {/* Bill detail modal */}
       {selectedBill && (
@@ -886,7 +933,11 @@ export default function Bills() {
 
 const s = StyleSheet.create({
   screenContainer: { flex: 1, backgroundColor: "#f1f5f9" },
-  container: { flex: 1 },
+  bodySection: { flex: 1 },
+  tabBarWrap: { paddingHorizontal: SIZES.lg, paddingTop: 16, paddingBottom: 8 },
+  scrollBody: { flex: 1 },
+  scrollContent: { paddingHorizontal: SIZES.lg, paddingBottom: 120 },
+  scrollContentEmpty: { flexGrow: 1, justifyContent: "center" },
 
   // Modal container (replaces AppLayout for modals)
   modalContainer: { flex: 1, backgroundColor: "#f1f5f9" },
@@ -926,14 +977,12 @@ const s = StyleSheet.create({
   totalDueSubtitle: { fontSize: 12, color: COLORS.mutedForeground, marginTop: 4, fontFamily: FONTS.regular },
   payAllBtn: { marginTop: 16, backgroundColor: "#1a9e6e", borderRadius: 14 },
 
-  // Body
-  mainContent: { paddingHorizontal: SIZES.lg, marginTop: 20 },
-  tabBarMargin: { marginBottom: 16 },
-  billList: { gap: 10, paddingBottom: 100 },
-  historyList: { gap: 10, paddingBottom: 100 },
+  billList: { paddingBottom: 16 },
+  emptyHint: { fontSize: 14, color: COLORS.mutedForeground, textAlign: "center", paddingVertical: 24 },
+  historyItemSpacing: { marginBottom: 10 },
 
   // Auto-pay card
-  autoPayCard: { borderWidth: 0.5, borderColor: "#e2e8f0" },
+  autoPayCard: { borderWidth: 0.5, borderColor: "#e2e8f0", marginBottom: 10 },
   autoPayRow: { flexDirection: "row", alignItems: "center", gap: 12 },
   autoPayIcon: {
     width: 38,
@@ -956,6 +1005,7 @@ const s = StyleSheet.create({
     padding: 14,
     borderWidth: 0.5,
     borderColor: "#e2e8f0",
+    marginBottom: 10,
   },
   billIconBg: {
     width: 44,
@@ -974,11 +1024,19 @@ const s = StyleSheet.create({
   // History
   historyCard: { borderWidth: 0.5, borderColor: "#e2e8f0" },
   historyHeader: { flexDirection: "row", alignItems: "flex-start", marginBottom: 10 },
-  historyFooter: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  historyFooter: { marginTop: 4, gap: 4 },
+  txnLabel: { fontSize: 10, color: COLORS.mutedForeground, fontFamily: FONTS.regular },
   txnId: { fontSize: 11, color: COLORS.mutedForeground, fontFamily: FONTS.regular },
-  historyAmount: { fontSize: 14, fontWeight: "600", color: COLORS.foreground, fontFamily: FONTS.display },
+  historyFooterBottom: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 6,
+    gap: 8,
+  },
+  historyAmount: { fontSize: 14, fontWeight: "600", color: COLORS.foreground, fontFamily: FONTS.display, flexShrink: 0 },
   receiptRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-  receiptBtn: { flexDirection: "row", alignItems: "center", gap: 4 },
+  receiptBtn: { flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 0 },
   receiptText: { fontSize: 12, color: "#2563eb", fontFamily: FONTS.regular },
 
   modalScroll: { flex: 1, paddingHorizontal: SIZES.lg },

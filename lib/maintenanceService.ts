@@ -29,10 +29,17 @@ export interface MaintenanceRequest {
   technicianAvatar?: string;
   createdAt: string;
   updatedAt: string;
-  photos: MaintenancePhoto[];
+  photoUrl?: string;
+  /** @deprecated Use photoUrl; kept for older API responses */
+  photos?: MaintenancePhoto[];
   ratings: MaintenanceRating[];
   videoUrl?: string;
   audioUrl?: string;
+  requestType?: string;
+  assetId?: string;
+  assetName?: string;
+  location?: string;
+  preferredTime?: string;
 }
 
 export interface CreateMaintenanceRequestPayload {
@@ -46,6 +53,8 @@ export interface CreateMaintenanceRequestPayload {
   assetName?: string;
   location?: string;
   preferredTime?: string;
+  photoUrl?: string;
+  /** First photo only; backend stores a single photoUrl */
   photos?: string[];
   videoUrl?: string;
   audioUrl?: string;

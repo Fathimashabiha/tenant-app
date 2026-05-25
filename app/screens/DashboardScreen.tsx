@@ -1,18 +1,25 @@
-import { useState, useEffect } from "react";
-import { View, Text, Image, ScrollView, TouchableOpacity, StyleSheet } from "react-native";
+import { useEffect, useMemo } from "react";
+import { View, Text, Image, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator } from "react-native";
 import { useNavigation } from "@react-navigation/native";
+import { useQuery } from "@tanstack/react-query";
 import {
-  Bell, Calendar, FileText, Wrench, Building2, CreditCard,
-  ChevronRight, MapPin, Home as HomeIcon, ArrowUpRight,
-  AlertTriangle, Megaphone, Clock, Zap, Droplets, DollarSign,
-  Star, TrendingUp, Camera, Download, Key, LucideIcon
+  Bell, FileText, Wrench, Building2, CreditCard,
+  ChevronRight, MapPin, Home as HomeIcon,
+  AlertTriangle, Megaphone, Clock,
+  LucideIcon
 } from "lucide-react-native";
-import Animated, { useSharedValue, useAnimatedStyle, withSpring, FadeInDown } from "react-native-reanimated";
+import Animated, { useSharedValue, useAnimatedStyle, withSpring } from "react-native-reanimated";
 import { LinearGradient } from "expo-linear-gradient";
 import AppLayout from "../../components/layout/AppLayout";
 import { COLORS, SIZES, FONTS, SHADOWS, GRADIENTS } from "../../constants/Theme";
-import { Badge, Card, IconButton } from "../../components/ui";
+import { IconButton, Card } from "../../components/ui";
 import { useFeatures } from "../context/FeatureContext";
+import { homeService } from "../../lib/homeService";
+import type { DashboardStat, ActivityItem } from "../../lib/homeFeed";
+import { FEED_ICON_MAP, feedIconColor } from "../../lib/homeFeedIcons";
+import { compareRecencyDesc } from "../../lib/dateUtils";
+
+const TENANT_ID = "default-tenant-uuid";
 
 const quickActions: { icon: LucideIcon, label: string, color: string, path: string }[] = [
   { icon: Building2,  label: "Move-in",     color: "teal", path: "MoveIn" },
@@ -22,19 +29,14 @@ const quickActions: { icon: LucideIcon, label: string, color: string, path: stri
   { icon: Building2,  label: "Amenities",    color: "blue", path: "Amenities" },
 ];
 
-const stats: { label: string, value: string, icon: LucideIcon, colors: readonly [string, string, ...string[]], path: string }[] = [
-  { label: "Rent Due",  value: "AED 8,500", icon: DollarSign, colors: GRADIENTS.activeNav, path: "Bills" },
-  { label: "Maint. Due", value: "AED 250", icon: CreditCard, colors: GRADIENTS.activeNav, path: "Bills" },
-  { label: "Requests",  value: "2 Open",    icon: Wrench,     colors: GRADIENTS.activeNav, path: "Maintenance" },
-  { label: "Booking",   value: "Mar 20",    icon: Calendar,   colors: ["#26A69A", "#2EC4B6"] as const, path: "Amenities" },
-];
+function statGradient(stat: DashboardStat): readonly [string, string, ...string[]] {
+  if (stat.iconKey === "calendar") return ["#26A69A", "#2EC4B6"] as const;
+  return GRADIENTS.activeNav;
+}
 
-const recentActivity = [
-  { icon: Zap,      title: "Electricity Bill", desc: "AED 342.50 - Feb 2026", time: "2h ago",  color: COLORS.primary, path: "Bills" },
-  { icon: Droplets, title: "Water Bill",        desc: "AED 89.00 - Feb 2026",  time: "2h ago",  color: COLORS.secondary, path: "Bills" },
-  { icon: Wrench,   title: "AC Maintenance Bill", desc: "AED 250.00 - Feb 2026", time: "3h ago",  color: COLORS.primary, path: "Bills" },
-  { icon: Wrench,   title: "AC Maintenance",    desc: "Technician assigned",    time: "5h ago",  color: COLORS.primary, path: "Maintenance" },
-];
+function statIcon(stat: DashboardStat): LucideIcon {
+  return FEED_ICON_MAP[stat.iconKey] ?? Wrench;
+}
 
 function LogoWithSpring() {
   const rotate = useSharedValue(-10);
@@ -55,28 +57,22 @@ export default function Dashboard() {
   const navigation = useNavigation<any>();
   const { config } = useFeatures();
 
+  const { data: homeFeed, isLoading } = useQuery({
+    queryKey: ["homeFeed", TENANT_ID],
+    queryFn: () => homeService.getFeed(TENANT_ID),
+  });
+
   const filteredQuickActions = quickActions.filter(action => {
     if (action.path === "Tenancy") return config.tenancyEnabled;
     return true;
   });
 
-  const filteredStats = stats.filter(stat => {
-    if (stat.path === "Bills") {
-      // If tenancy is disabled, show only maintenance items in bills stats
-      if (!config.tenancyEnabled) return stat.label.includes("Maintenance");
-      return true;
-    }
-    return true;
-  });
-
-  const filteredActivity = recentActivity.filter(item => {
-    if (item.path === "Bills") {
-      // If tenancy is disabled, show only maintenance items in bills activity
-      if (!config.tenancyEnabled) return item.title.includes("Maintenance");
-      return true;
-    }
-    return true;
-  });
+  const dashboardStats = homeFeed?.stats ?? [];
+  const recentActivity = useMemo(
+    () => [...(homeFeed?.activity ?? [])].sort(compareRecencyDesc),
+    [homeFeed?.activity],
+  );
+  const unreadCount = homeFeed?.unreadCount ?? 0;
 
   return (
     <AppLayout>
@@ -98,7 +94,7 @@ export default function Dashboard() {
             <IconButton
               icon={<Bell size={20} color={COLORS.foreground} />}
               onPress={() => navigation.navigate("Notifications")}
-              badgeCount={3}
+              badgeCount={unreadCount > 0 ? unreadCount : undefined}
             />
           </View>
 
@@ -199,17 +195,26 @@ export default function Dashboard() {
 
           {/* Stats row */}
           <View style={styles.statsRow}>
-            {filteredStats.map((stat, i) => (
-              <TouchableOpacity key={i} onPress={() => navigation.navigate(stat.path)} style={styles.statCard}>
-                <LinearGradient colors={stat.colors} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.statGradient}>
-                  <View style={styles.statIconBg}>
-                    <stat.icon size={16} color="white" />
-                  </View>
-                  <Text style={styles.statLabel}>{stat.label}</Text>
-                  <Text style={styles.statValue}>{stat.value}</Text>
-                </LinearGradient>
-              </TouchableOpacity>
-            ))}
+            {isLoading ? (
+              <View style={styles.statsLoading}>
+                <ActivityIndicator color={COLORS.primary} />
+              </View>
+            ) : (
+              dashboardStats.map((stat, i) => {
+                const StatIcon = statIcon(stat);
+                return (
+                  <TouchableOpacity key={i} onPress={() => navigation.navigate(stat.path)} style={styles.statCard}>
+                    <LinearGradient colors={statGradient(stat)} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.statGradient}>
+                      <View style={styles.statIconBg}>
+                        <StatIcon size={16} color="white" />
+                      </View>
+                      <Text style={styles.statLabel}>{stat.label}</Text>
+                      <Text style={styles.statValue}>{stat.value}</Text>
+                    </LinearGradient>
+                  </TouchableOpacity>
+                );
+              })
+            )}
           </View>
 
           {/* Quick Actions */}
@@ -237,24 +242,38 @@ export default function Dashboard() {
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Recent Activity</Text>
             <View style={styles.activityList}>
-              {filteredActivity.map((item, i) => (
-                <TouchableOpacity key={i} onPress={() => navigation.navigate(item.path)} activeOpacity={0.75}>
-                  <Card style={styles.activityItem} padding={SIZES.md}>
-                    <View style={[styles.activityIconBg, { backgroundColor: item.color + "18" }]}>
-                      <item.icon size={18} color={item.color} />
-                    </View>
-                    <View style={styles.activityContent}>
-                      <Text style={styles.activityTitle}>{item.title}</Text>
-                      <Text style={styles.activityDesc}>{item.desc}</Text>
-                    </View>
-                    <View style={styles.activityTimeRow}>
-                      <Clock size={12} color={COLORS.mutedForeground} />
-                      <Text style={styles.activityTime}>{item.time}</Text>
-                    </View>
-                    <ChevronRight size={14} color={COLORS.mutedForeground} />
-                  </Card>
-                </TouchableOpacity>
-              ))}
+              {isLoading ? (
+                <View style={styles.statsLoading}>
+                  <ActivityIndicator color={COLORS.primary} />
+                </View>
+              ) : recentActivity.length === 0 ? (
+                <View style={styles.emptyActivity}>
+                  <Text style={styles.emptyActivityText}>No recent activity yet</Text>
+                </View>
+              ) : (
+                recentActivity.map((item: ActivityItem) => {
+                  const ItemIcon = FEED_ICON_MAP[item.iconKey] ?? Wrench;
+                  const iconColor = feedIconColor(item.iconKey);
+                  return (
+                    <TouchableOpacity key={item.id} onPress={() => navigation.navigate(item.path)} activeOpacity={0.75}>
+                      <Card style={styles.activityItem} padding={SIZES.md}>
+                        <View style={[styles.activityIconBg, { backgroundColor: iconColor + "18" }]}>
+                          <ItemIcon size={18} color={iconColor} />
+                        </View>
+                        <View style={styles.activityContent}>
+                          <Text style={styles.activityTitle}>{item.title}</Text>
+                          <Text style={styles.activityDesc}>{item.desc}</Text>
+                        </View>
+                        <View style={styles.activityTimeRow}>
+                          <Clock size={12} color={COLORS.mutedForeground} />
+                          <Text style={styles.activityTime}>{item.time}</Text>
+                        </View>
+                        <ChevronRight size={14} color={COLORS.mutedForeground} />
+                      </Card>
+                    </TouchableOpacity>
+                  );
+                })
+              )}
             </View>
           </View>
 
@@ -332,6 +351,9 @@ const styles = StyleSheet.create({
   // Main content
   mainContent:      { paddingHorizontal: SIZES.lg, marginTop: SIZES.md },
   statsRow:         { flexDirection: "row", gap: SIZES.sm, marginTop: 20 },
+  statsLoading:     { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 28 },
+  emptyActivity:    { paddingVertical: 24, alignItems: "center" },
+  emptyActivityText:{ fontSize: 12, color: COLORS.mutedForeground, fontFamily: FONTS.regular },
   statCard:         { flex: 1, height: 110, borderRadius: SIZES.radiusMedium, overflow: "hidden", ...SHADOWS.sm, backgroundColor: COLORS.transparent },
   statGradient:     { flex: 1, padding: 12 },
   statIconBg:       { width: 32, height: 32, backgroundColor: "rgba(255,255,255,0.2)", borderRadius: SIZES.radiusSmall, alignItems: "center", justifyContent: "center", marginBottom: SIZES.sm },

@@ -2,8 +2,14 @@ import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { amenitiesService } from "../../lib/amenitiesService";
 import {
+  buildNextDaysOptions,
+  formatDisplayDate,
+  isAmenityBookingPast,
+  labelForDateValue,
+} from "../../lib/dateUtils";
+import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  Modal, TextInput, KeyboardAvoidingView, Platform,
+  Modal, TextInput, KeyboardAvoidingView, Platform, Image, Alert,
 } from "react-native";
 import {
   Dumbbell, Waves, Users, Presentation, Truck, Flame,
@@ -34,8 +40,8 @@ type Booking = {
 
 // ─── Data ────────────────────────────────────────────────────────────────────
 
-const DATES = ["Mar 18", "Mar 19", "Mar 20", "Mar 21", "Mar 22", "Mar 23", "Mar 24"];
 const TIME_SLOTS = ["6:00 AM", "7:00 AM", "8:00 AM", "9:00 AM", "5:00 PM", "6:00 PM", "7:00 PM", "8:00 PM"];
+
 const DURATION_OPTIONS = ["1 Day", "1 Week", "1 Month", "Permanent"];
 
 const FACILITY_LOOKUPS: Record<string, { Icon: any; iconColor: string; iconBg: string }> = {
@@ -54,7 +60,15 @@ const getFacilityMeta = (name: string) => {
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
-function QRModal({ facility, onClose }: { facility: string; onClose: () => void }) {
+function QRModal({
+  facility,
+  qrCodeUrl,
+  onClose,
+}: {
+  facility: string;
+  qrCodeUrl?: string;
+  onClose: () => void;
+}) {
   return (
     <Modal visible transparent animationType="fade">
       <View style={styles.overlay}>
@@ -63,7 +77,11 @@ function QRModal({ facility, onClose }: { facility: string; onClose: () => void 
             <X size={20} color="#64748b" />
           </TouchableOpacity>
           <View style={styles.qrBox}>
-            <QrCode size={110} color="white" />
+            {qrCodeUrl ? (
+              <Image source={{ uri: qrCodeUrl }} style={styles.qrImage} resizeMode="contain" />
+            ) : (
+              <QrCode size={110} color="white" />
+            )}
           </View>
           <Text style={styles.qrTitle}>{facility} Access</Text>
           <Text style={styles.qrSub}>Scan at entrance</Text>
@@ -74,13 +92,42 @@ function QRModal({ facility, onClose }: { facility: string; onClose: () => void 
   );
 }
 
-function ParkingModal({ onClose }: { onClose: () => void }) {
+function ParkingModal({
+  tenantId,
+  onClose,
+  onSubmitted,
+}: {
+  tenantId: string;
+  onClose: () => void;
+  onSubmitted: () => void;
+}) {
   const [plate, setPlate] = useState("");
   const [vehicleType, setVehicleType] = useState("");
   const [purpose, setPurpose] = useState("");
   const [duration, setDuration] = useState("1 Day");
   const [showDrop, setShowDrop] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+
+  const parkingMutation = useMutation({
+    mutationFn: (payload: {
+      vehicleModel: string;
+      licensePlate: string;
+      vehicleType?: string;
+      purpose?: string;
+      duration?: string;
+    }) =>
+      amenitiesService.requestParking({
+        tenantId,
+        ...payload,
+      }),
+    onSuccess: () => {
+      setSubmitted(true);
+      onSubmitted();
+    },
+    onError: () => {
+      Alert.alert("Error", "Could not submit your parking request. Please try again.");
+    },
+  });
 
   if (submitted) {
     return (
@@ -91,7 +138,9 @@ function ParkingModal({ onClose }: { onClose: () => void }) {
               <Check size={28} color="white" />
             </View>
             <Text style={styles.qrTitle}>Request Submitted!</Text>
-            <Text style={styles.qrSub}>Your parking request is being reviewed.</Text>
+            <Text style={styles.qrSub}>
+              Your request is being reviewed. You will get a parking QR once approved (about 8 seconds in demo mode).
+            </Text>
             <TouchableOpacity style={styles.submitBtn} onPress={onClose}>
               <LinearGradient colors={GRADIENTS.activeNav} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.submitBtnGrad}>
                 <Text style={styles.submitBtnText}>Done</Text>
@@ -160,9 +209,23 @@ function ParkingModal({ onClose }: { onClose: () => void }) {
             </View>
           )}
 
-          <TouchableOpacity style={styles.submitBtn} onPress={() => setSubmitted(true)}>
+          <TouchableOpacity
+            style={styles.submitBtn}
+            disabled={!plate.trim() || parkingMutation.isPending}
+            onPress={() =>
+              parkingMutation.mutate({
+                vehicleModel: vehicleType.trim() || "Vehicle",
+                licensePlate: plate.trim(),
+                vehicleType: vehicleType.trim() || undefined,
+                purpose: purpose.trim() || undefined,
+                duration,
+              })
+            }
+          >
             <LinearGradient colors={GRADIENTS.activeNav} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.submitBtnGrad}>
-              <Text style={styles.submitBtnText}>Submit Request</Text>
+              <Text style={styles.submitBtnText}>
+                {parkingMutation.isPending ? "Submitting..." : "Submit Request"}
+              </Text>
             </LinearGradient>
           </TouchableOpacity>
         </View>
@@ -176,6 +239,7 @@ function ParkingModal({ onClose }: { onClose: () => void }) {
 export default function Amenities() {
   const queryClient = useQueryClient();
   const TENANT_ID = "default-tenant-uuid";
+  const dateOptions = useMemo(() => buildNextDaysOptions(7), []);
 
   const { data: serverFacilities = [] } = useQuery({
     queryKey: ["facilities"],
@@ -190,28 +254,60 @@ export default function Amenities() {
   const { data: serverParking = [] } = useQuery({
     queryKey: ["parking", TENANT_ID],
     queryFn: () => amenitiesService.getParkingRequests(TENANT_ID),
-  });
-
-  const bookMutation = useMutation({
-    mutationFn: (payload: any) => amenitiesService.bookFacility(payload),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["amenitiesBookings"] });
-      setConfirmed(true);
-      setTimeout(() => {
-        setConfirmed(false);
-        setSelected(null);
-        setSelectedTime(null);
-      }, 2500);
-    }
+    refetchInterval: (query) => {
+      const list = query.state.data ?? [];
+      if (list.some((p) => p.status === "pending")) return 4000;
+      if (list.some((p) => p.status === "approved" && !p.qrCodeUrl)) return 2000;
+      return false;
+    },
   });
 
   const [tab, setTab] = useState<"book" | "history">("book");
   const [selected, setSelected] = useState<string | null>(null);
-  const [selectedDate, setSelectedDate] = useState("Mar 20");
+  const [selectedFacilityId, setSelectedFacilityId] = useState<string | null>(null);
+  const [selectedDate, setSelectedDate] = useState(() => buildNextDaysOptions(7)[0]?.value ?? "");
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState(false);
-  const [qrFacility, setQrFacility] = useState<string | null>(null);
+  const [qrView, setQrView] = useState<{ facility: string; qrCodeUrl?: string } | null>(null);
   const [showParking, setShowParking] = useState(false);
+
+  const { data: availability } = useQuery({
+    queryKey: ["amenityAvailability", selectedFacilityId, selectedDate],
+    queryFn: () => amenitiesService.getAvailability(selectedFacilityId!, selectedDate),
+    enabled: Boolean(selectedFacilityId && selectedDate),
+  });
+
+  const bookedStartTimes = useMemo(
+    () => new Set((availability?.bookedSlots ?? []).map((s) => s.startTime)),
+    [availability],
+  );
+
+  const bookMutation = useMutation({
+    mutationFn: (payload: Parameters<typeof amenitiesService.bookFacility>[0]) =>
+      amenitiesService.bookFacility(payload),
+    onSuccess: (booking) => {
+      queryClient.invalidateQueries({ queryKey: ["amenitiesBookings"] });
+      queryClient.invalidateQueries({ queryKey: ["amenityAvailability"] });
+      queryClient.invalidateQueries({ queryKey: ["homeFeed"] });
+      setConfirmed(true);
+      if (booking.qrCodeUrl && selected) {
+        setQrView({ facility: selected, qrCodeUrl: booking.qrCodeUrl });
+      }
+      setTimeout(() => {
+        setConfirmed(false);
+        setSelected(null);
+        setSelectedFacilityId(null);
+        setSelectedTime(null);
+      }, 2500);
+    },
+    onError: (err: any) => {
+      const msg =
+        err?.response?.data?.error ||
+        "This time slot is no longer available. Please choose another slot.";
+      Alert.alert("Booking unavailable", msg);
+      queryClient.invalidateQueries({ queryKey: ["amenityAvailability"] });
+    },
+  });
 
   const uiFacilities = useMemo(() => {
     return serverFacilities.map(f => {
@@ -228,40 +324,58 @@ export default function Amenities() {
   }, [serverFacilities]);
 
   const apiUpcoming = useMemo(() => {
-    return serverBookings.filter(b => b.status !== 'completed' && b.status !== 'cancelled').map(b => ({
-      id: b.id,
-      facility: b.facility?.name || "Facility",
-      date: new Date(b.bookingDate).toLocaleDateString(),
-      time: `${b.startTime} - ${b.endTime}`,
-      status: "upcoming"
-    }));
+    return serverBookings
+      .filter(
+        (b) =>
+          b.status === "confirmed" &&
+          !isAmenityBookingPast(b.bookingDate, b.endTime)
+      )
+      .map((b) => ({
+        id: b.id,
+        facility: b.facility?.name || "Facility",
+        date: formatDisplayDate(b.bookingDate),
+        time: `${b.startTime} - ${b.endTime}`,
+        status: "upcoming" as const,
+        qrCodeUrl: b.qrCodeUrl,
+      }));
   }, [serverBookings]);
 
   const apiHistory = useMemo(() => {
-    return serverBookings.filter(b => b.status === 'completed' || b.status === 'cancelled').map(b => ({
-      id: b.id,
-      facility: b.facility?.name || "Facility",
-      date: new Date(b.bookingDate).toLocaleDateString(),
-      time: `${b.startTime} - ${b.endTime}`,
-      status: b.status as "completed" | "cancelled" | "upcoming"
-    }));
+    return serverBookings
+      .filter((b) => {
+        if (b.status === "cancelled" || b.status === "completed") return true;
+        return (
+          b.status === "confirmed" &&
+          isAmenityBookingPast(b.bookingDate, b.endTime)
+        );
+      })
+      .map((b) => ({
+        id: b.id,
+        facility: b.facility?.name || "Facility",
+        date: formatDisplayDate(b.bookingDate),
+        time: `${b.startTime} - ${b.endTime}`,
+        status: (b.status === "cancelled"
+          ? "cancelled"
+          : "completed") as "completed" | "cancelled" | "upcoming",
+        qrCodeUrl: b.qrCodeUrl,
+      }));
   }, [serverBookings]);
 
   const handleBook = () => {
-    // Basic mock of finding an ID
-    const facilityId = serverFacilities.find(f => f.name.toLowerCase().includes(selected?.toLowerCase() || ''))?.id;
+    if (!selectedFacilityId || !selectedTime) return;
     bookMutation.mutate({
       tenantId: TENANT_ID,
-      facilityId: facilityId || "00000000-0000-0000-0000-000000000000",
+      facilityId: selectedFacilityId,
       bookingDate: selectedDate,
-      startTime: selectedTime || "10:00 AM",
-      endTime: "11:00 AM"
+      startTime: selectedTime,
     });
   };
 
   const handleFacilityPress = (f: Facility) => {
     if (!f.available) return;
     setSelected(f.label);
+    setSelectedFacilityId(f.id);
+    setSelectedTime(null);
   };
 
   return (
@@ -334,18 +448,18 @@ export default function Amenities() {
                   <Text style={styles.bookingLabel}>Select Date</Text>
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
                     <View style={{ flexDirection: "row", gap: 8 }}>
-                      {DATES.map((d) => (
+                      {dateOptions.map((d) => (
                         <TouchableOpacity
-                          key={d}
-                          onPress={() => setSelectedDate(d)}
-                          style={[styles.dateChip, selectedDate === d && styles.dateChipActive]}
+                          key={d.value}
+                          onPress={() => { setSelectedDate(d.value); setSelectedTime(null); }}
+                          style={[styles.dateChip, selectedDate === d.value && styles.dateChipActive]}
                         >
-                          {selectedDate === d ? (
+                          {selectedDate === d.value ? (
                             <LinearGradient colors={GRADIENTS.activeNav} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.dateChipGrad}>
-                              <Text style={styles.dateChipTextActive}>{d}</Text>
+                              <Text style={styles.dateChipTextActive}>{d.label}</Text>
                             </LinearGradient>
                           ) : (
-                            <Text style={styles.dateChipText}>{d}</Text>
+                            <Text style={styles.dateChipText}>{d.label}</Text>
                           )}
                         </TouchableOpacity>
                       ))}
@@ -355,21 +469,30 @@ export default function Amenities() {
                   {/* Time */}
                   <Text style={styles.bookingLabel}>Select Time</Text>
                   <View style={styles.timeGrid}>
-                    {TIME_SLOTS.map((t) => (
+                    {TIME_SLOTS.map((t) => {
+                      const isBooked = bookedStartTimes.has(t);
+                      return (
                       <TouchableOpacity
                         key={t}
+                        disabled={isBooked}
                         onPress={() => setSelectedTime(t)}
-                        style={[styles.timeChip, selectedTime === t && styles.timeChipActive]}
+                        style={[
+                          styles.timeChip,
+                          selectedTime === t && styles.timeChipActive,
+                          isBooked && styles.timeChipBooked,
+                        ]}
                       >
-                        {selectedTime === t ? (
+                        {selectedTime === t && !isBooked ? (
                           <LinearGradient colors={GRADIENTS.activeNav} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.timeChipGrad}>
                             <Text style={styles.timeChipTextActive}>{t}</Text>
                           </LinearGradient>
                         ) : (
-                          <Text style={styles.timeChipText}>{t}</Text>
+                          <Text style={[styles.timeChipText, isBooked && styles.timeChipTextBooked]}>
+                            {isBooked ? `${t} · Booked` : t}
+                          </Text>
                         )}
                       </TouchableOpacity>
-                    ))}
+                    );})}
                   </View>
 
                   {selectedTime && (
@@ -389,34 +512,52 @@ export default function Amenities() {
                     <Check size={28} color="white" />
                   </View>
                   <Text style={styles.successTitle}>Booking Confirmed!</Text>
-                  <Text style={styles.successSub}>{selected} · {selectedDate} · {selectedTime}</Text>
+                  <Text style={styles.successSub}>
+                    {selected} · {labelForDateValue(selectedDate, dateOptions)} · {selectedTime}
+                  </Text>
                 </View>
               )}
 
               {/* Parking Section */}
               <Text style={styles.sectionTitle}>Parking</Text>
               <View style={styles.parkingSection}>
-                {/* Assigned slot */}
-                <View style={styles.parkingSlotCard}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.parkingSlotTitle}>Plate: K-88291 · Spot B2-14</Text>
-                    <Text style={styles.parkingSlotSub}>Assigned</Text>
-                  </View>
-                  <View style={styles.parkingBadgeActive}>
-                    <Text style={styles.parkingBadgeActiveText}>Active</Text>
-                  </View>
-                </View>
+                {serverParking.length === 0 ? (
+                  <Text style={styles.parkingEmpty}>No parking passes yet.</Text>
+                ) : (
+                  serverParking.map((p) => (
+                    <View key={p.id} style={styles.parkingSlotCard}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.parkingSlotTitle}>
+                          {p.licensePlate} · {p.assignedSlot ? `Spot ${p.assignedSlot}` : "Pending slot"}
+                        </Text>
+                        <Text style={styles.parkingSlotSub}>
+                          {p.purpose || p.vehicleModel} · {p.duration || "—"}
+                        </Text>
+                      </View>
+                      {p.status === "approved" ? (
+                        <TouchableOpacity
+                          style={[styles.qrBtn, !p.qrCodeUrl && styles.qrBtnDisabled]}
+                          disabled={!p.qrCodeUrl}
+                          onPress={() =>
+                            setQrView({
+                              facility: `Parking ${p.assignedSlot ?? "pass"}`,
+                              qrCodeUrl: p.qrCodeUrl,
+                            })
+                          }
+                        >
+                          <QrCode size={18} color={p.qrCodeUrl ? COLORS.primary : "#94a3b8"} />
+                        </TouchableOpacity>
+                      ) : (
+                        <View style={styles.parkingBadgePending}>
+                          <Text style={styles.parkingBadgePendingText}>
+                            {p.status === "pending" ? "Pending" : p.status}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  ))
+                )}
 
-                {/* Guest slot */}
-                <View style={styles.parkingSlotCard}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.parkingSlotTitle}>Plate: Guest · Spot V-03</Text>
-                    <Text style={styles.parkingSlotSub}>Visitor</Text>
-                  </View>
-                  <Text style={styles.parkingBadgeExpired}>Expired</Text>
-                </View>
-
-                {/* Request additional */}
                 <TouchableOpacity style={styles.parkingRequestBtn} onPress={() => setShowParking(true)}>
                   <Text style={styles.parkingRequestBtnText}>+ Request Additional Parking</Text>
                 </TouchableOpacity>
@@ -443,7 +584,7 @@ export default function Amenities() {
                         </View>
                         <TouchableOpacity
                           style={styles.qrBtn}
-                          onPress={() => setQrFacility(b.facility)}
+                          onPress={() => setQrView({ facility: b.facility, qrCodeUrl: b.qrCodeUrl })}
                         >
                           <QrCode size={18} color={COLORS.primary} />
                         </TouchableOpacity>
@@ -477,8 +618,11 @@ export default function Amenities() {
                           {b.status.charAt(0).toUpperCase() + b.status.slice(1)}
                         </Text>
                       </View>
-                      {b.status === "completed" && (
-                        <TouchableOpacity style={styles.qrBtn} onPress={() => setQrFacility(b.facility)}>
+                      {(b.status === "completed" || b.status === "confirmed") && b.qrCodeUrl && (
+                        <TouchableOpacity
+                          style={styles.qrBtn}
+                          onPress={() => setQrView({ facility: b.facility, qrCodeUrl: b.qrCodeUrl })}
+                        >
                           <QrCode size={18} color="#94a3b8" />
                         </TouchableOpacity>
                       )}
@@ -493,10 +637,21 @@ export default function Amenities() {
         </ScrollView>
 
         {/* QR Modal */}
-        {qrFacility && <QRModal facility={qrFacility} onClose={() => setQrFacility(null)} />}
+        {qrView && (
+          <QRModal
+            facility={qrView.facility}
+            qrCodeUrl={qrView.qrCodeUrl}
+            onClose={() => setQrView(null)}
+          />
+        )}
 
-        {/* Parking Modal */}
-        {showParking && <ParkingModal onClose={() => setShowParking(false)} />}
+        {showParking && (
+          <ParkingModal
+            tenantId={TENANT_ID}
+            onClose={() => setShowParking(false)}
+            onSubmitted={() => queryClient.invalidateQueries({ queryKey: ["parking"] })}
+          />
+        )}
       </View>
     </AppLayout>
   );
@@ -631,6 +786,14 @@ const styles = StyleSheet.create({
   timeChipGrad: { width: "100%", paddingVertical: 10, alignItems: "center" },
   timeChipText: { paddingVertical: 10, fontSize: 11, fontWeight: "700", color: "#0f172a" },
   timeChipTextActive: { fontSize: 11, fontWeight: "700", color: "white" },
+  timeChipBooked: { backgroundColor: "#f1f5f9", borderColor: "#e2e8f0", opacity: 0.7 },
+  timeChipTextBooked: { color: "#94a3b8", fontSize: 10 },
+  qrImage: { width: 200, height: 200, backgroundColor: "white", borderRadius: 8 },
+  parkingEmpty: { fontSize: 13, color: "#64748b", marginBottom: 12 },
+  parkingBadgePending: {
+    backgroundColor: "#fff7ed", paddingHorizontal: 10, paddingVertical: 4, borderRadius: 100,
+  },
+  parkingBadgePendingText: { fontSize: 11, fontWeight: "700", color: "#c2410c" },
   confirmBtn: { borderRadius: 14, paddingVertical: 14, alignItems: "center" },
   confirmBtnText: { fontSize: 15, fontWeight: "700", color: "white" },
 
@@ -664,6 +827,7 @@ const styles = StyleSheet.create({
     width: 36, height: 36, borderRadius: 10, backgroundColor: "#f1f5f9",
     alignItems: "center", justifyContent: "center",
   },
+  qrBtnDisabled: { opacity: 0.5 },
 
   // History
   historyCard: {

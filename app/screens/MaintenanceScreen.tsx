@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { maintenanceService } from "../../lib/maintenanceService";
+import { maintenanceService, type MaintenanceRequest } from "../../lib/maintenanceService";
 import {
   clearMaintenanceDraft,
   loadMaintenanceDraft,
@@ -91,6 +91,13 @@ const ISSUE_TYPES = [
 
 const PREFERRED_TIMES = ["Morning", "Afternoon", "Evening", "Any"];
 
+const PREFERRED_TIME_SLOTS: Record<string, string> = {
+  Morning: "8:00 AM – 12:00 PM",
+  Afternoon: "12:00 PM – 5:00 PM",
+  Evening: "5:00 PM – 9:00 PM",
+  Any: "Any time during the day",
+};
+
 const LIKE_TAGS = ["Professional", "On Time", "Clean Work", "Friendly", "Knowledgeable", "Quick Fix"];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -118,6 +125,73 @@ const STATUS_BG: Record<Status, string> = {
   completed:   COLORS.badgeBackground,
   cancelled:   "#fef2f2",
 };
+
+function hasTenantRating(r: MaintenanceRequest): boolean {
+  return (r.ratings?.length ?? 0) > 0;
+}
+
+/** History = cancelled, closed, or completed after tenant has rated. */
+function isHistoryRequest(r: MaintenanceRequest): boolean {
+  if (r.status === "cancelled" || r.status === "closed") return true;
+  if (r.status === "completed" && hasTenantRating(r)) return true;
+  return false;
+}
+
+function isActiveRequest(r: MaintenanceRequest): boolean {
+  return !isHistoryRequest(r);
+}
+
+function mapServerRequest(r: MaintenanceRequest): Request {
+  const rawStatus = r.status === "open" ? "in_progress" : r.status;
+  const statusVal = (rawStatus === "closed" ? "completed" : rawStatus) as Status;
+  const tenantRating = r.ratings?.[0]?.rating;
+
+  return {
+    id: r.id,
+    title: r.title,
+    category: r.category,
+    description: r.description,
+    location: "Door 1204, 12th, Tower A, Marina Heights",
+    submittedDate: new Date(r.createdAt).toLocaleDateString(),
+    status: statusVal,
+    technician: r.technicianName || "TBD",
+    techInitials: r.technicianName ? r.technicianName.substring(0, 2).toUpperCase() : "?",
+    techCompany: "Pending",
+    techRating: 0,
+    techJobs: 0,
+    rating: tenantRating,
+    timeline: [
+      { label: "Request Submitted", date: new Date(r.createdAt).toLocaleDateString(), done: true },
+      {
+        label: "Technician Assigned",
+        date: (statusVal === "assigned" || statusVal === "in_progress" || statusVal === "completed")
+          ? (r.updatedAt ? new Date(r.updatedAt).toLocaleDateString() : "Done")
+          : "Pending",
+        done: (statusVal === "assigned" || statusVal === "in_progress" || statusVal === "completed"),
+      },
+      {
+        label: "In Progress",
+        date: (statusVal === "in_progress" || statusVal === "completed")
+          ? (r.updatedAt ? new Date(r.updatedAt).toLocaleDateString() : "Done")
+          : "Pending",
+        done: (statusVal === "in_progress" || statusVal === "completed"),
+      },
+      {
+        label: "Completed",
+        date: statusVal === "completed"
+          ? (r.updatedAt ? new Date(r.updatedAt).toLocaleDateString() : "Done")
+          : "Pending",
+        done: statusVal === "completed",
+      },
+    ],
+    chat: [],
+    videoUrl: r.videoUrl,
+    audioUrl: r.audioUrl,
+    photos: r.photoUrl
+      ? [r.photoUrl]
+      : r.photos?.map((p) => p.photoUrl) || [],
+  };
+}
 
 function StarRow({ rating, onRate, size = 22 }: { rating: number; onRate?: (n: number) => void; size?: number }) {
   return (
@@ -167,103 +241,31 @@ export default function Maintenance() {
   const { data: serverRequests = [], isLoading } = useQuery({
     queryKey: ["maintenance", TENANT_ID],
     queryFn: () => maintenanceService.getRequests(TENANT_ID),
+    refetchInterval: 12_000,
   });
 
-  const allActive = useMemo(() => {
-    return serverRequests.filter(r => r.status !== 'completed' && r.status !== 'cancelled').map(r => {
-      const statusVal = (r.status === 'open' ? 'in_progress' : r.status) as Status;
-      return {
-        id: r.id,
-        title: r.title,
-        category: r.category,
-        description: r.description,
-        location: "Door 1204, 12th, Tower A, Marina Heights",
-        submittedDate: new Date(r.createdAt).toLocaleDateString(),
-        status: statusVal,
-        technician: r.technicianName || "TBD",
-        techInitials: r.technicianName ? r.technicianName.substring(0, 2).toUpperCase() : "?",
-        techCompany: "Pending",
-        techRating: 0,
-        techJobs: 0,
-        timeline: [
-          { label: "Request Submitted", date: new Date(r.createdAt).toLocaleDateString(), done: true },
-          { 
-            label: "Technician Assigned", 
-            date: (statusVal === 'assigned' || statusVal === 'in_progress' || statusVal === 'completed') 
-              ? (r.updatedAt ? new Date(r.updatedAt).toLocaleDateString() : 'Done') 
-              : 'Pending', 
-            done: (statusVal === 'assigned' || statusVal === 'in_progress' || statusVal === 'completed') 
-          },
-          { 
-            label: "In Progress", 
-            date: (statusVal === 'in_progress' || statusVal === 'completed') 
-              ? (r.updatedAt ? new Date(r.updatedAt).toLocaleDateString() : 'Done') 
-              : 'Pending', 
-            done: (statusVal === 'in_progress' || statusVal === 'completed') 
-          },
-          { 
-            label: "Completed", 
-            date: statusVal === 'completed' 
-              ? (r.updatedAt ? new Date(r.updatedAt).toLocaleDateString() : 'Done') 
-              : 'Pending', 
-            done: statusVal === 'completed' 
-          },
-        ],
-        chat: [],
-        videoUrl: r.videoUrl,
-        audioUrl: r.audioUrl,
-        photos: r.photos?.map((p: any) => p.photoUrl) || [],
-      };
-    }) as Request[];
-  }, [serverRequests]);
+  useEffect(() => {
+    const shouldRefreshBills = serverRequests.some(
+      (r) =>
+        r.status === "completed" ||
+        r.status === "closed" ||
+        r.status === "in_progress" ||
+        r.status === "assigned",
+    );
+    if (shouldRefreshBills) {
+      queryClient.invalidateQueries({ queryKey: ["bills"] });
+    }
+  }, [serverRequests, queryClient]);
 
-  const allHistory = useMemo(() => {
-    return serverRequests.filter(r => r.status === 'completed' || r.status === 'cancelled').map(r => {
-      const statusVal = r.status as Status;
-      return {
-        id: r.id,
-        title: r.title,
-        category: r.category,
-        description: r.description,
-        location: "Door 1204, 12th, Tower A, Marina Heights",
-        submittedDate: new Date(r.createdAt).toLocaleDateString(),
-        status: statusVal,
-        technician: r.technicianName || "TBD",
-        techInitials: r.technicianName ? r.technicianName.substring(0, 2).toUpperCase() : "?",
-        techCompany: "Pending",
-        techRating: 0,
-        techJobs: 0,
-        timeline: [
-          { label: "Request Submitted", date: new Date(r.createdAt).toLocaleDateString(), done: true },
-          { 
-            label: "Technician Assigned", 
-            date: (statusVal === 'assigned' || statusVal === 'in_progress' || statusVal === 'completed') 
-              ? (r.updatedAt ? new Date(r.updatedAt).toLocaleDateString() : 'Done') 
-              : 'Pending', 
-            done: (statusVal === 'assigned' || statusVal === 'in_progress' || statusVal === 'completed') 
-          },
-          { 
-            label: "In Progress", 
-            date: (statusVal === 'in_progress' || statusVal === 'completed') 
-              ? (r.updatedAt ? new Date(r.updatedAt).toLocaleDateString() : 'Done') 
-              : 'Pending', 
-            done: (statusVal === 'in_progress' || statusVal === 'completed') 
-          },
-          { 
-            label: "Completed", 
-            date: statusVal === 'completed' 
-              ? (r.updatedAt ? new Date(r.updatedAt).toLocaleDateString() : 'Done') 
-              : 'Pending', 
-            done: statusVal === 'completed' 
-          },
-        ],
-        chat: [],
-        videoUrl: r.videoUrl,
-        audioUrl: r.audioUrl,
-        photos: r.photos?.map((p: any) => p.photoUrl) || [],
-      };
-    }) as Request[];
-  }, [serverRequests]);
+  const allActive = useMemo(
+    () => serverRequests.filter(isActiveRequest).map(mapServerRequest),
+    [serverRequests],
+  );
+
+  const allHistory = useMemo(
+    () => serverRequests.filter(isHistoryRequest).map(mapServerRequest),
+    [serverRequests],
+  );
 
   const [view, setView]                   = useState<ScreenView>("list");
   const [tab, setTab]                     = useState<"active" | "history">("active");
@@ -612,7 +614,14 @@ export default function Maintenance() {
 
   // ─── Audio: microphone recording (expo-audio) ─────────────────────────────
   const startRecordingAudio = async () => {
-    if (isRecordingAudio || !isExpoAudioAvailable()) return;
+    if (isRecordingAudio) return;
+    if (!isExpoAudioAvailable()) {
+      Alert.alert(
+        "Voice Note Unavailable",
+        "Microphone recording requires the latest app build with expo-audio. Reinstall the newest build and try again."
+      );
+      return;
+    }
 
     try {
       const granted = await requestMaintenanceMicPermission();
@@ -835,6 +844,8 @@ export default function Maintenance() {
     mutationFn: (payload: any) => maintenanceService.createRequest(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["maintenance"] });
+      queryClient.invalidateQueries({ queryKey: ["bills"] });
+      queryClient.invalidateQueries({ queryKey: ["homeFeed"] });
       clearMaintenanceDraft().catch(() => {});
       resetCreateFlow();
       // Clear media states
@@ -856,6 +867,22 @@ export default function Maintenance() {
       }
       setView("list");
     }
+  });
+
+  const rateMutation = useMutation({
+    mutationFn: ({ id, rating, comments }: { id: string; rating: number; comments?: string }) =>
+      maintenanceService.rateRequest(id, rating, comments),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["maintenance"] });
+      queryClient.invalidateQueries({ queryKey: ["bills"] });
+      queryClient.invalidateQueries({ queryKey: ["homeFeed"] });
+      setStarRating(0);
+      setSelectedTags([]);
+      setView("thank_you");
+    },
+    onError: () => {
+      Alert.alert("Error", "Could not submit your rating. Please try again.");
+    },
   });
 
   const handleSubmitRequest = () => {
@@ -881,7 +908,8 @@ export default function Maintenance() {
         ? scannedAsset.location
         : "Door 1204, 12th, Tower A, Marina Heights",
       preferredTime: prefTime,
-      photos: capturedPhotos,
+      photoUrl: capturedPhotos[0],
+      photos: capturedPhotos.length > 0 ? capturedPhotos : undefined,
       videoUrl: capturedVideo ? capturedVideo.uri : undefined,
       audioUrl: capturedAudio ? capturedAudio.uri : undefined,
     });
@@ -897,7 +925,11 @@ export default function Maintenance() {
     }
   };
 
-  const handleSubmitRating = () => setView("thank_you");
+  const handleSubmitRating = () => {
+    if (!selectedReq || starRating === 0) return;
+    const comments = selectedTags.length > 0 ? selectedTags.join(", ") : undefined;
+    rateMutation.mutate({ id: selectedReq.id, rating: starRating, comments });
+  };
 
   const navigation = useNavigation<any>();
 
@@ -1405,6 +1437,14 @@ export default function Maintenance() {
                 </TouchableOpacity>
               ))}
             </View>
+            {prefTime ? (
+              <View style={styles.prefTimeSummary}>
+                <Clock size={14} color={COLORS.primary} />
+                <Text style={styles.prefTimeSummaryText}>
+                  {prefTime}: {PREFERRED_TIME_SLOTS[prefTime]}
+                </Text>
+              </View>
+            ) : null}
 
             {/* Submit */}
             <TouchableOpacity style={styles.submitBtn} onPress={handleSubmitRequest}>
@@ -1432,8 +1472,8 @@ export default function Maintenance() {
   // ── Render: Detail ────────────────────────────────────────────────────────
   if (view === "detail" && selectedReq) {
     const req = selectedReq;
-    const isActive = req.status === "in_progress" || req.status === "assigned" || req.status === "created";
     const isAssignedOrInProgress = req.status === "in_progress" || req.status === "assigned";
+    const isAwaitingTenantConfirm = req.status === "completed" && req.rating === undefined;
     return (
       <View style={styles.container}>
           <SubHeader title={req.id} onBack={goList} />
@@ -1566,6 +1606,15 @@ export default function Maintenance() {
               </View>
             )}
 
+            {isAwaitingTenantConfirm && (
+              <View style={[styles.card, { backgroundColor: "#ecfdf5", borderColor: "#bbf7d0", borderWidth: 1 }]}>
+                <Text style={[styles.cardSectionLabel, { color: COLORS.success }]}>Work Completed</Text>
+                <Text style={{ fontSize: 13, color: "#166534", lineHeight: 20 }}>
+                  Your technician has marked this job complete. Please confirm the issue is resolved and rate the service.
+                </Text>
+              </View>
+            )}
+
             {/* Timeline Card */}
             <View style={styles.card}>
               <Text style={styles.cardSectionLabel}>Progress Timeline</Text>
@@ -1586,19 +1635,19 @@ export default function Maintenance() {
             </View>
 
             {/* Chat with Technician link */}
-            {isAssignedOrInProgress && (
+            {isAssignedOrInProgress || isAwaitingTenantConfirm ? (
               <TouchableOpacity style={styles.chatLink} onPress={() => setView("chat")}>
                 <MessageCircle size={16} color={COLORS.secondary} />
                 <Text style={[styles.chatLinkText, { color: COLORS.secondary }]}>Chat with Technician</Text>
               </TouchableOpacity>
-            )}
+            ) : null}
 
-            {/* Mark as Complete */}
-            {isAssignedOrInProgress && (
+            {/* Confirm & rate after technician marks complete */}
+            {isAwaitingTenantConfirm && (
               <TouchableOpacity style={styles.completeBtn} onPress={handleMarkComplete}>
                 <LinearGradient colors={GRADIENTS.activeNav} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.completeBtnGrad}>
                   <CheckCircle2 size={18} color="white" style={{ marginRight: 8 }} />
-                  <Text style={styles.completeBtnText}>Mark as Complete</Text>
+                  <Text style={styles.completeBtnText}>Confirm & Rate Service</Text>
                 </LinearGradient>
               </TouchableOpacity>
             )}
@@ -1731,10 +1780,12 @@ export default function Maintenance() {
             )}
 
             {starRating > 0 && (
-              <TouchableOpacity onPress={handleSubmitRating}>
+              <TouchableOpacity onPress={handleSubmitRating} disabled={rateMutation.isPending}>
                 <LinearGradient colors={GRADIENTS.activeNav} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.submitBtnGrad}>
                   <Star size={16} color="white" style={{ marginRight: 8 }} />
-                  <Text style={styles.submitBtnText}>Submit Rating</Text>
+                  <Text style={styles.submitBtnText}>
+                    {rateMutation.isPending ? "Submitting..." : "Submit Rating"}
+                  </Text>
                 </LinearGradient>
               </TouchableOpacity>
             )}
@@ -1756,9 +1807,15 @@ export default function Maintenance() {
             </View>
             <Text style={styles.thankYouTitle}>Thank You!</Text>
             <Text style={styles.thankYouSub}>Your feedback helps us improve</Text>
-            <TouchableOpacity style={{ marginTop: 28, width: "100%" }} onPress={goList}>
+            <TouchableOpacity
+              style={{ marginTop: 28, width: "100%" }}
+              onPress={() => {
+                setTab("history");
+                goList();
+              }}
+            >
               <LinearGradient colors={GRADIENTS.activeNav} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.submitBtnGrad}>
-                <Text style={styles.submitBtnText}>Back to Maintenance</Text>
+                <Text style={styles.submitBtnText}>View in History</Text>
               </LinearGradient>
             </TouchableOpacity>
           </View>
@@ -1992,6 +2049,19 @@ const styles = StyleSheet.create({
   prefTimeChipActive: { borderColor: "#0d9488", backgroundColor: "#f0fdfa" },
   prefTimeText:       { fontSize: 13, fontWeight: "600", color: "#64748b" },
   prefTimeTextActive: { color: "#0d9488" },
+  prefTimeSummary: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 8,
+    backgroundColor: "#f0fdfa",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: "#99f6e4",
+  },
+  prefTimeSummaryText: { fontSize: 13, fontWeight: "600", color: "#0f766e", flex: 1 },
   submitBtn: { marginTop: 16 },
   submitBtnGrad: { borderRadius: 14, paddingVertical: 16, flexDirection: "row", alignItems: "center", justifyContent: "center" },
   submitBtnText: { fontSize: 15, fontWeight: "700", color: "white" },

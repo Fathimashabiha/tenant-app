@@ -23,6 +23,8 @@ export function TabBar<T extends string>({
           <TouchableOpacity
             key={tab.key}
             onPress={() => onTabChange(tab.key)}
+            activeOpacity={0.7}
+            hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
             style={[styles.tabItem, isActive && styles.tabItemActive]}
           >
             <Text style={[styles.tabLabel, isActive ? styles.tabLabelActive : styles.tabLabelInactive]}>

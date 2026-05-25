@@ -4,7 +4,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import NavigationRoot from './navigation/NavigationRoot';
 import { FeatureProvider } from './context/FeatureContext';
 import { AuthProvider } from './context/AuthContext';
-import { registerRootComponent } from 'expo';
 import { useEffect } from 'react';
 import * as SplashScreen from 'expo-splash-screen';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
@@ -47,4 +46,3 @@ function App() {
 }
 
 export default App;
-registerRootComponent(App);

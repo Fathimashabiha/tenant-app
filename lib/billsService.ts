@@ -17,6 +17,8 @@ export interface Bill {
   status: 'paid' | 'unpaid' | 'overdue' | string;
   billType: string;
   billingPeriod: string;
+  workorderId?: string;
+  maintenanceRequestId?: string;
   createdAt: string;
   payments: BillPayment[];
 }

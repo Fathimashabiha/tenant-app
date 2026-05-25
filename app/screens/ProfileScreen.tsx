@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  TextInput, Alert, Switch,
+  TextInput, Alert,
 } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import {
@@ -96,20 +96,13 @@ const profileSections: {
       { icon: Star,        label: "Rate App",              desc: "Give us feedback"     },
     ],
   },
-  {
-    title: "Feature Settings",
-    items: [
-      { icon: Users,       label: "Community Tab",         desc: "Enable community features" },
-      { icon: FileText,    label: "Tenancy Features",      desc: "Show tenancy details" },
-    ],
-  },
 ];
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function Profile() {
   const navigation = useNavigation<any>();
-  const { config, updateConfig } = useFeatures();
+  const { config } = useFeatures();
   const [activeView, setActiveView] = useState<ActiveView>("main");
 
   // Family state
@@ -484,45 +477,30 @@ export default function Profile() {
               <View key={si} style={styles.section}>
                 <Text style={styles.sectionTitle}>{section.title}</Text>
                 <View style={styles.sectionItems}>
-                  {items.map((item, ii) => {
-                    const isFeature = section.title === "Feature Settings";
-                    return (
-                      <Card key={ii}
-                      onPress={() => {
-                        if (item.label === "My Documents")    setActiveView("docs");
-                        if (item.label === "Move-In Photos")  setActiveView("photos");
-                        if (item.label === "Family Members")  setActiveView("family");
-                        if (item.label === "Renewal Request") setActiveView("renewal");
-                        if (item.label === "Move-Out Request")setActiveView("moveout");
-                      }}
-                      style={styles.itemCard} padding={12}>
-                      <View style={styles.itemIconBg}><item.icon size={18} color={COLORS.mutedForeground} /></View>
-                      <View style={styles.itemInfo}>
-                        <Text style={styles.itemLabel}>{item.label}</Text>
-                        <Text style={styles.itemDesc}>{item.desc}</Text>
-                      </View>
-                      {isFeature ? (
-                        <Switch
-                          value={
-                            item.label === "Community Tab" ? config.communityEnabled :
-                            config.tenancyEnabled
-                          }
-                          onValueChange={(val) => {
-                            if (item.label === "Community Tab") updateConfig({ communityEnabled: val });
-                            if (item.label === "Tenancy Features") updateConfig({ tenancyEnabled: val });
-                          }}
-                          trackColor={{ false: COLORS.border, true: COLORS.primary }}
-                          thumbColor="#fff"
-                        />
-                      ) : (
-                        <>
-                          {item.badge && <Badge label={item.badge} variant="primary" />}
-                          <ChevronRight size={16} color={COLORS.mutedForeground} />
-                        </>
-                      )}
-                    </Card>
-                  );
-                })}
+                  {items.map((item, ii) => (
+                      <Card
+                        key={ii}
+                        onPress={() => {
+                          if (item.label === "My Documents") setActiveView("docs");
+                          if (item.label === "Move-In Photos") setActiveView("photos");
+                          if (item.label === "Family Members") setActiveView("family");
+                          if (item.label === "Renewal Request") setActiveView("renewal");
+                          if (item.label === "Move-Out Request") setActiveView("moveout");
+                        }}
+                        style={styles.itemCard}
+                        padding={12}
+                      >
+                        <View style={styles.itemIconBg}>
+                          <item.icon size={18} color={COLORS.mutedForeground} />
+                        </View>
+                        <View style={styles.itemInfo}>
+                          <Text style={styles.itemLabel}>{item.label}</Text>
+                          <Text style={styles.itemDesc}>{item.desc}</Text>
+                        </View>
+                        {item.badge && <Badge label={item.badge} variant="primary" />}
+                        <ChevronRight size={16} color={COLORS.mutedForeground} />
+                      </Card>
+                  ))}
               </View>
             </View>
           );

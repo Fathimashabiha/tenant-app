@@ -14,7 +14,12 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Camera access is used to scan QR codes and capture maintenance photos and videos.",
+        "NSMicrophoneUsageDescription": "Microphone access is used to record voice notes and video with audio.",
+        "NSPhotoLibraryUsageDescription": "Photo library access lets you attach existing photos to maintenance requests."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -23,6 +28,7 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
+      "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": "com.fathimashabiha.zendwellmobile",
       "permissions": [

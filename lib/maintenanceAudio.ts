@@ -1,5 +1,6 @@
 import { requireOptionalNativeModule } from "expo-modules-core";
-import AudioModule, {
+import {
+  AudioModule,
   createAudioPlayer,
   RecordingPresets,
   requestRecordingPermissionsAsync,
@@ -20,7 +21,9 @@ export function isExpoAudioAvailable(): boolean {
   if (!audioChecked) {
     audioChecked = true;
     try {
-      audioAvailable = requireOptionalNativeModule("ExpoAudio") != null;
+      audioAvailable =
+        requireOptionalNativeModule("ExpoAudio") != null &&
+        AudioModule?.AudioRecorder != null;
     } catch {
       audioAvailable = false;
     }
@@ -55,6 +58,9 @@ export async function configureMaintenanceAudioForPlayback(): Promise<void> {
 }
 
 export async function createMaintenanceRecorder(): Promise<MaintenanceAudioRecorder> {
+  if (!isExpoAudioAvailable()) {
+    throw new Error("expo-audio native module is not available");
+  }
   const recorder = new AudioModule.AudioRecorder(RecordingPresets.HIGH_QUALITY);
   await recorder.prepareToRecordAsync();
   return recorder;
