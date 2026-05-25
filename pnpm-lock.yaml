@@ -89,6 +89,9 @@ importers:
       react-native-svg:
         specifier: ^15.15.5
         version: 15.15.5(react-native@0.79.6(@babel/core@7.29.0)(@types/react@19.0.14)(react@19.0.0))(react@19.0.0)
+      react-native-worklets:
+        specifier: ^0.8.3
+        version: 0.8.3(@babel/core@7.29.0)(@react-native/metro-config@0.85.3(@babel/core@7.29.0))(react-native@0.79.6(@babel/core@7.29.0)(@types/react@19.0.14)(react@19.0.0))(react@19.0.0)
       zustand:
         specifier: ^4.5.0
         version: 4.5.7(@types/react@19.0.14)(react@19.0.0)
