@@ -162,10 +162,11 @@ const ROOMMATES: Roommate[] = [
   { id: 3, initials: "SA", name: "Sara Al Maktoum", role: "Flatmate", color: "#d97706", bgColor: "#fff7ed" },
 ];
 
+// ✅ FIXED: Added `title` field to each record
 const PAYMENT_HISTORY: PaymentRecord[] = [
-  { date: "Feb 28, 2026", method: "Visa ···· 4521", txnId: "TXN-0226-4521", amount: "AED 8,995.00", status: "success" },
-  { date: "Feb 25, 2026", method: "Apple Pay", txnId: "TXN-0225-AP01", amount: "AED 512.30", status: "success" },
-  { date: "Feb 25, 2026", method: "Visa ···· 4521", txnId: "TXN-0225-4521", amount: "AED 118.00", status: "success" },
+  { title: "Rent", date: "Feb 28, 2026", method: "Visa ···· 4521", txnId: "TXN-0226-4521", amount: "AED 8,995.00", status: "success" },
+  { title: "Electricity (DEWA)", date: "Feb 25, 2026", method: "Apple Pay", txnId: "TXN-0225-AP01", amount: "AED 512.30", status: "success" },
+  { title: "Water (DEWA)", date: "Feb 25, 2026", method: "Visa ···· 4521", txnId: "TXN-0225-4521", amount: "AED 118.00", status: "success" },
 ];
 
 const PAYMENT_METHODS = [
@@ -939,10 +940,8 @@ const s = StyleSheet.create({
   scrollContent: { paddingHorizontal: SIZES.lg, paddingBottom: 120 },
   scrollContentEmpty: { flexGrow: 1, justifyContent: "center" },
 
-  // Modal container (replaces AppLayout for modals)
   modalContainer: { flex: 1, backgroundColor: "#f1f5f9" },
 
-  // Gradient header (main Bills screen)
   mainGradientHeader: {
     paddingHorizontal: 20,
     paddingTop: 48,
@@ -953,7 +952,6 @@ const s = StyleSheet.create({
   mainGradientHeaderRow: {
     flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 18,
   },
-  // Gradient header (modal sub-screens)
   gradientHeader: {
     paddingHorizontal: 20,
     paddingTop: 48,
@@ -981,7 +979,6 @@ const s = StyleSheet.create({
   emptyHint: { fontSize: 14, color: COLORS.mutedForeground, textAlign: "center", paddingVertical: 24 },
   historyItemSpacing: { marginBottom: 10 },
 
-  // Auto-pay card
   autoPayCard: { borderWidth: 0.5, borderColor: "#e2e8f0", marginBottom: 10 },
   autoPayRow: { flexDirection: "row", alignItems: "center", gap: 12 },
   autoPayIcon: {
@@ -995,7 +992,6 @@ const s = StyleSheet.create({
   autoPayLabel: { fontSize: 14, fontWeight: "600", color: COLORS.foreground, fontFamily: FONTS.bold },
   autoPaySub: { fontSize: 12, color: COLORS.mutedForeground, fontFamily: FONTS.regular },
 
-  // Bill rows
   billRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1021,7 +1017,6 @@ const s = StyleSheet.create({
   billRight: { alignItems: "flex-end", gap: 4 },
   billAmountText: { fontSize: 14, fontWeight: "600", color: COLORS.foreground, fontFamily: FONTS.display },
 
-  // History
   historyCard: { borderWidth: 0.5, borderColor: "#e2e8f0" },
   historyHeader: { flexDirection: "row", alignItems: "flex-start", marginBottom: 10 },
   historyFooter: { marginTop: 4, gap: 4 },
@@ -1041,7 +1036,6 @@ const s = StyleSheet.create({
 
   modalScroll: { flex: 1, paddingHorizontal: SIZES.lg },
 
-  // Cards
   amountCard: {
     marginTop: 20,
     marginBottom: 12,
@@ -1064,12 +1058,10 @@ const s = StyleSheet.create({
     letterSpacing: 0.5,
   },
 
-  // Detail
   detailType: { fontSize: 13, color: COLORS.mutedForeground, fontFamily: FONTS.regular, marginBottom: 4 },
   detailAmount: { fontSize: 30, fontWeight: "700", color: COLORS.foreground, fontFamily: FONTS.display, textAlign: "center" },
   detailDue: { fontSize: 12, color: COLORS.mutedForeground, marginTop: 4, fontFamily: FONTS.regular },
 
-  // Row items
   rowItem: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -1081,7 +1073,6 @@ const s = StyleSheet.create({
   rowKey: { fontSize: 13, color: COLORS.mutedForeground, fontFamily: FONTS.regular },
   rowVal: { fontSize: 13, fontWeight: "600", color: COLORS.foreground, fontFamily: FONTS.bold },
 
-  // Actions
   actionGroup: { paddingHorizontal: 0, paddingBottom: 40, gap: 10, marginTop: 4 },
   fullBtn: { borderRadius: 14 },
   enableAutoPayBtn: { borderRadius: 14, backgroundColor: "#2563eb" },
@@ -1100,7 +1091,6 @@ const s = StyleSheet.create({
   },
   outlineBtnText: { fontSize: 14, color: COLORS.foreground, fontFamily: FONTS.bold },
 
-  // Payment options
   paymentOption: {
     flexDirection: "row",
     alignItems: "center",
@@ -1129,7 +1119,6 @@ const s = StyleSheet.create({
   payOptionLabel: { fontSize: 14, fontWeight: "600", color: COLORS.foreground, fontFamily: FONTS.bold },
   payOptionSub: { fontSize: 12, color: COLORS.mutedForeground, fontFamily: FONTS.regular },
 
-  // Roommate
   roommateOption: {
     flexDirection: "row",
     alignItems: "center",
@@ -1154,10 +1143,8 @@ const s = StyleSheet.create({
   },
   avatarText: { fontSize: 13, fontWeight: "700", fontFamily: FONTS.bold },
 
-  // Auto-pay icon
   autopayIconRow: { alignItems: "center", marginBottom: 10 },
 
-  // Badge
   badge: {
     paddingHorizontal: 8,
     paddingVertical: 3,
@@ -1167,7 +1154,6 @@ const s = StyleSheet.create({
   },
   badgeText: { fontSize: 11, fontWeight: "600", fontFamily: FONTS.bold },
 
-  // Success
   successWrapper: {
     flex: 1,
     paddingHorizontal: SIZES.lg,
